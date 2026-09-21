@@ -29,9 +29,9 @@ class LinearAcceleration {
 }
 
 class GravityFilter {
-  GravityFilter({this.timeConstant = 0.3});
+  GravityFilter();
 
-  final double timeConstant;
+  double timeConstant = 0.5;
 
   double _gravityX = 0;
   double _gravityY = 0;
