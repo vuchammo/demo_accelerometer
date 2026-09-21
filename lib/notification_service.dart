@@ -1,0 +1,135 @@
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+class NotificationService {
+  NotificationService._();
+  static final NotificationService instance = NotificationService._();
+
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+
+  bool _isInitialized = false;
+
+  /// Khởi tạo plugin thông báo và cấu hình các kênh âm thanh
+  Future<void> init() async {
+    if (_isInitialized) return;
+
+    // Cấu hình icon thông báo mặc định cho Android
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    // Cấu hình xin quyền cho iOS
+    const DarwinInitializationSettings iosSettings =
+        DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    const InitializationSettings settings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+    );
+
+    await _plugin.initialize(settings: settings);
+
+    // Xin quyền trên Android 13+
+    await requestPermissions();
+
+    // Tạo Notification Channel riêng kèm custom sound trên Android
+    await _createNotificationChannels();
+
+    _isInitialized = true;
+  }
+
+  /// Xin quyền gửi thông báo (dành cho Android 13+)
+  Future<void> requestPermissions() async {
+    final androidImplementation = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (androidImplementation != null) {
+      await androidImplementation.requestNotificationsPermission();
+    }
+  }
+
+  /// Khởi tạo 2 Channel riêng biệt để phát 2 âm thanh khác nhau trên Android
+  Future<void> _createNotificationChannels() async {
+    final androidImplementation = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (androidImplementation == null) return;
+
+    // 1. Channel khi có di chuyển (âm thanh motion_detected)
+    const AndroidNotificationChannel movingChannel = AndroidNotificationChannel(
+      'motion_channel_moving',
+      'Có chuyển động',
+      description: 'Phát âm thanh khi thiết bị phát hiện có di chuyển',
+      importance: Importance.max,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('motion_detected'),
+      enableVibration: true,
+    );
+
+    // 2. Channel khi dừng di chuyển (âm thanh motion_stopped)
+    const AndroidNotificationChannel stoppedChannel =
+        AndroidNotificationChannel(
+      'motion_channel_stopped',
+      'Dừng chuyển động',
+      description: 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
+      importance: Importance.max,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound('motion_stopped'),
+      enableVibration: true,
+    );
+
+    await androidImplementation.createNotificationChannel(movingChannel);
+    await androidImplementation.createNotificationChannel(stoppedChannel);
+  }
+
+  /// Bắn thông báo tương ứng với trạng thái di chuyển / không di chuyển
+  Future<void> showMovementNotification({required bool isMoving}) async {
+    final int notificationId = isMoving ? 1001 : 1002;
+
+    final String title =
+        isMoving ? 'Phát hiện chuyển động' : 'Thiết bị đã dừng lại';
+    final String body = isMoving
+        ? 'Thiết bị đang di chuyển (đạt 6 mẫu liên tiếp trong ngưỡng)'
+        : 'Thiết bị không còn di chuyển (đạt 6 mẫu liên tiếp dưới ngưỡng)';
+
+    final AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      isMoving ? 'motion_channel_moving' : 'motion_channel_stopped',
+      isMoving ? 'Có chuyển động' : 'Dừng chuyển động',
+      channelDescription: isMoving
+          ? 'Phát âm thanh khi thiết bị phát hiện có di chuyển'
+          : 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound(
+        isMoving ? 'motion_detected' : 'motion_stopped',
+      ),
+      enableVibration: true,
+    );
+
+    final DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      sound: isMoving ? 'motion_detected.wav' : 'motion_stopped.wav',
+    );
+
+    final NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    await _plugin.show(
+      id: notificationId,
+      title: title,
+      body: body,
+      notificationDetails: notificationDetails,
+    );
+  }
+}

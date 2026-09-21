@@ -5,8 +5,10 @@ import 'package:rxdart/rxdart.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'gravity_filter.dart';
+import 'notification_service.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(
     const MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -18,7 +20,7 @@ void main() {
 class MotionDetector {
   MotionDetector({
     this.thresholdMin = 0.6,
-    this.thresholdMax = 3.0,
+    this.thresholdMax = 5.0,
     this.requiredConsecutivePoints = 6,
     double timeConstant = 0.3,
     bool initialMoving = false,
@@ -118,6 +120,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   @override
   void initState() {
     super.initState();
+    NotificationService.instance.init();
     _startListening();
     _clockTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) {
@@ -142,6 +145,9 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
 
             if (stateChanged) {
               _stateChangedTime = now;
+              NotificationService.instance.showMovementNotification(
+                isMoving: _detector.isMoving,
+              );
             }
             if (mounted) {
               setState(() {});
