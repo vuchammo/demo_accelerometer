@@ -4,8 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 class ForegroundServiceManager {
   ForegroundServiceManager._();
-  static final ForegroundServiceManager instance =
-      ForegroundServiceManager._();
+  static final ForegroundServiceManager instance = ForegroundServiceManager._();
 
   bool _isInitialized = false;
 
@@ -56,10 +55,10 @@ class ForegroundServiceManager {
 
     final ServiceRequestResult result =
         await FlutterForegroundTask.startService(
-      serviceId: 256,
-      notificationTitle: 'Giám sát chuyển động',
-      notificationText: 'Duy trì cảm biến gia tốc ổn định 500ms',
-    );
+          serviceId: 256,
+          notificationTitle: 'Giám sát chuyển động',
+          notificationText: 'Duy trì cảm biến gia tốc ổn định 500ms',
+        );
 
     return result is ServiceRequestSuccess;
   }

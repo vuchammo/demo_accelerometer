@@ -74,7 +74,7 @@ class NotificationService {
 
     // 1. Channel khi có di chuyển (âm thanh motion_detected)
     const AndroidNotificationChannel movingChannel = AndroidNotificationChannel(
-      'motion_channel_moving',
+      'motion_channel_moving_v2',
       'Có chuyển động',
       description: 'Phát âm thanh khi thiết bị phát hiện có di chuyển',
       importance: Importance.max,
@@ -86,7 +86,7 @@ class NotificationService {
     // 2. Channel khi dừng di chuyển (âm thanh motion_stopped)
     const AndroidNotificationChannel stoppedChannel =
         AndroidNotificationChannel(
-          'motion_channel_stopped',
+          'motion_channel_stopped_v2',
           'Dừng chuyển động',
           description: 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
           importance: Importance.max,
@@ -108,7 +108,7 @@ class NotificationService {
 
     final AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
-          isMoving ? 'motion_channel_moving' : 'motion_channel_stopped',
+          isMoving ? 'motion_channel_moving_v2' : 'motion_channel_stopped_v2',
           isMoving ? 'Có chuyển động' : 'Dừng chuyển động',
           channelDescription: isMoving
               ? 'Phát âm thanh khi thiết bị phát hiện có di chuyển'
@@ -120,6 +120,7 @@ class NotificationService {
             isMoving ? 'motion_detected' : 'motion_stopped',
           ),
           enableVibration: true,
+          onlyAlertOnce: false,
         );
 
     final DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
@@ -134,11 +135,18 @@ class NotificationService {
       iOS: iosDetails,
     );
 
-    await _plugin.show(
-      id: notificationId,
-      title: title,
-      body: body,
-      notificationDetails: notificationDetails,
-    );
+    try {
+      // Hủy thông báo cũ để Android xem đây là thông báo mới hoàn toàn,
+      // luôn bung banner nổi (Heads-up) và đổ chuông mỗi lần đổi trạng thái.
+      await _plugin.cancel(id: notificationId);
+      await _plugin.show(
+        id: notificationId,
+        title: title,
+        body: body,
+        notificationDetails: notificationDetails,
+      );
+    } catch (e) {
+      // Bỏ qua hoặc ghi log nếu có lỗi
+    }
   }
 }

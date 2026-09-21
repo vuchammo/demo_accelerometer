@@ -31,7 +31,7 @@ class LinearAcceleration {
 class GravityFilter {
   GravityFilter();
 
-  double timeConstant = 0.5;
+  double timeConstant = 1.2;
 
   double _gravityX = 0;
   double _gravityY = 0;
@@ -74,7 +74,7 @@ class GravityFilter {
 
     final diffMicros = now.difference(_lastTimestamp!).inMicroseconds;
 
-    final dT = diffMicros > 0 ? diffMicros / 1000000.0 : 0.001;
+    final dT = diffMicros / 1000000.0;
     _lastTimestamp = now;
 
     final currentAlpha = timeConstant / (timeConstant + dT);

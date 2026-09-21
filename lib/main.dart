@@ -20,24 +20,17 @@ void main() {
 }
 
 class MotionDetector {
-  MotionDetector({
-    this.thresholdMin = 0.6,
-    this.thresholdMax = 5.0,
-    this.requiredConsecutivePoints = 6,
-    double timeConstant = 0.3,
-    bool initialMoving = false,
-  }) : _isMoving = initialMoving,
-       _gravityFilter = GravityFilter();
+  MotionDetector() : _gravityFilter = GravityFilter();
 
-  final double thresholdMin;
-  final double thresholdMax;
-  final int requiredConsecutivePoints;
+  final double thresholdMin = 1.0;
+  final double thresholdMax = 5.0;
+  final int requiredConsecutivePoints = 5;
   final GravityFilter _gravityFilter;
 
   final List<double> _recentMagnitudes = [];
   List<double> get recentMagnitudes => List.unmodifiable(_recentMagnitudes);
 
-  bool _isMoving;
+  bool _isMoving = false;
   bool get isMoving => _isMoving;
 
   int _consecutiveHighCount = 0;
