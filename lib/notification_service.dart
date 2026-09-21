@@ -20,10 +20,10 @@ class NotificationService {
     // Cấu hình xin quyền cho iOS
     const DarwinInitializationSettings iosSettings =
         DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+        );
 
     const InitializationSettings settings = InitializationSettings(
       android: androidSettings,
@@ -41,7 +41,7 @@ class NotificationService {
     _isInitialized = true;
   }
 
-  /// Xin quyền gửi thông báo (dành cho Android 13+)
+  /// Xin quyền gửi thông báo (Android và iOS)
   Future<void> requestPermissions() async {
     final androidImplementation = _plugin
         .resolvePlatformSpecificImplementation<
@@ -49,6 +49,18 @@ class NotificationService {
         >();
     if (androidImplementation != null) {
       await androidImplementation.requestNotificationsPermission();
+    }
+
+    final iosImplementation = _plugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
+    if (iosImplementation != null) {
+      await iosImplementation.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
     }
   }
 
@@ -74,14 +86,14 @@ class NotificationService {
     // 2. Channel khi dừng di chuyển (âm thanh motion_stopped)
     const AndroidNotificationChannel stoppedChannel =
         AndroidNotificationChannel(
-      'motion_channel_stopped',
-      'Dừng chuyển động',
-      description: 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
-      importance: Importance.max,
-      playSound: true,
-      sound: RawResourceAndroidNotificationSound('motion_stopped'),
-      enableVibration: true,
-    );
+          'motion_channel_stopped',
+          'Dừng chuyển động',
+          description: 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('motion_stopped'),
+          enableVibration: true,
+        );
 
     await androidImplementation.createNotificationChannel(movingChannel);
     await androidImplementation.createNotificationChannel(stoppedChannel);
@@ -89,29 +101,26 @@ class NotificationService {
 
   /// Bắn thông báo tương ứng với trạng thái di chuyển / không di chuyển
   Future<void> showMovementNotification({required bool isMoving}) async {
-    final int notificationId = isMoving ? 1001 : 1002;
+    final int notificationId = 1001;
 
-    final String title =
-        isMoving ? 'Phát hiện chuyển động' : 'Thiết bị đã dừng lại';
-    final String body = isMoving
-        ? 'Thiết bị đang di chuyển (đạt 6 mẫu liên tiếp trong ngưỡng)'
-        : 'Thiết bị không còn di chuyển (đạt 6 mẫu liên tiếp dưới ngưỡng)';
+    final String title = 'Demo';
+    final String body = isMoving ? 'Có chuyển động' : 'Dừng chuyển động';
 
     final AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
-      isMoving ? 'motion_channel_moving' : 'motion_channel_stopped',
-      isMoving ? 'Có chuyển động' : 'Dừng chuyển động',
-      channelDescription: isMoving
-          ? 'Phát âm thanh khi thiết bị phát hiện có di chuyển'
-          : 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      sound: RawResourceAndroidNotificationSound(
-        isMoving ? 'motion_detected' : 'motion_stopped',
-      ),
-      enableVibration: true,
-    );
+          isMoving ? 'motion_channel_moving' : 'motion_channel_stopped',
+          isMoving ? 'Có chuyển động' : 'Dừng chuyển động',
+          channelDescription: isMoving
+              ? 'Phát âm thanh khi thiết bị phát hiện có di chuyển'
+              : 'Phát âm thanh khi thiết bị phát hiện dừng di chuyển',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound(
+            isMoving ? 'motion_detected' : 'motion_stopped',
+          ),
+          enableVibration: true,
+        );
 
     final DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
       presentAlert: true,
