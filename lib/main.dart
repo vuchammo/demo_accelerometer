@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import 'foreground_service_manager.dart';
 import 'gravity_filter.dart';
 import 'notification_service.dart';
 
@@ -121,6 +123,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   void initState() {
     super.initState();
     NotificationService.instance.init();
+    ForegroundServiceManager.instance.startService();
     _startListening();
     _clockTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) {
@@ -162,6 +165,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   void dispose() {
     _clockTimer?.cancel();
     _subscription?.cancel();
+    ForegroundServiceManager.instance.stopService();
     super.dispose();
   }
 
@@ -182,8 +186,9 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
       alpha: 0.35,
     );
 
-    return SafeArea(
-      child: Center(
+    return WithForegroundTask(
+      child: SafeArea(
+        child: Center(
         child: SingleChildScrollView(
           physics: const ClampingScrollPhysics(),
           child: Padding(
@@ -417,6 +422,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
