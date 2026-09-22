@@ -29,8 +29,8 @@ class MotionDetectorView extends StatefulWidget {
 class _MotionDetectorViewState extends State<MotionDetectorView> {
   final MotionDetector _detector = MotionDetector();
 
-  StreamSubscription<AccelerometerEvent>? _subscription;
-  static const Duration _sampleInterval = Duration(milliseconds: 500);
+  StreamSubscription<UserAccelerometerEvent>? _subscription;
+  static const Duration _sampleInterval = Duration(milliseconds: 100);
 
   DateTime _stateChangedTime = DateTime.now();
   Timer? _clockTimer;
@@ -49,32 +49,33 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   }
 
   void _startListening() {
-    _subscription = accelerometerEventStream(samplingPeriod: _sampleInterval)
-        .throttleTime(const Duration(milliseconds: 350))
-        .listen(
-          (AccelerometerEvent event) {
-            final now = DateTime.now();
+    _subscription =
+        userAccelerometerEventStream(samplingPeriod: _sampleInterval)
+            .throttleTime(const Duration(milliseconds: 70))
+            .listen(
+              (UserAccelerometerEvent event) {
+                final now = DateTime.now();
 
-            final stateChanged = _detector.addSample(
-              event.x,
-              event.y,
-              event.z,
-              event.timestamp,
+                final stateChanged = _detector.addSample(
+                  event.x,
+                  event.y,
+                  event.z,
+                  event.timestamp,
+                );
+
+                if (stateChanged) {
+                  _stateChangedTime = now;
+                  NotificationService.instance.showMovementNotification(
+                    isMoving: _detector.isMoving,
+                  );
+                }
+                if (mounted) {
+                  setState(() {});
+                }
+              },
+              onError: (e) {},
+              cancelOnError: true,
             );
-
-            if (stateChanged) {
-              _stateChangedTime = now;
-              NotificationService.instance.showMovementNotification(
-                isMoving: _detector.isMoving,
-              );
-            }
-            if (mounted) {
-              setState(() {});
-            }
-          },
-          onError: (e) {},
-          cancelOnError: true,
-        );
   }
 
   @override

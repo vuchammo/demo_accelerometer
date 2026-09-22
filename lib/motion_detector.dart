@@ -1,13 +1,11 @@
-import 'package:demo_accelerometer/gravity_filter.dart';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 class MotionDetector {
-  MotionDetector() : _gravityFilter = GravityFilter();
-
   final double thresholdMin = 1.0;
   final double thresholdMax = 5.0;
-  final int requiredConsecutivePoints = 5;
-  final GravityFilter _gravityFilter;
+  final int requiredConsecutivePoints = 18;
 
   final List<double> _recentMagnitudes = [];
   List<double> get recentMagnitudes => List.unmodifiable(_recentMagnitudes);
@@ -21,24 +19,20 @@ class MotionDetector {
   int _consecutiveLowCount = 0;
   int get consecutiveLowCount => _consecutiveLowCount;
 
-  GravityFilter get gravityFilter => _gravityFilter;
-
   bool addSample(double x, double y, double z, DateTime time) {
-    final linear = _gravityFilter.filter(x, y, z, time);
+    final magnitude = sqrt(x * x + y * y + z * z);
 
-    _recentMagnitudes.insert(0, linear.magnitude);
+    _recentMagnitudes.insert(0, magnitude);
     if (_recentMagnitudes.length > 10) {
       _recentMagnitudes.removeLast();
     }
 
     debugPrint(
-      'magnitude: ${linear.magnitude.toStringAsFixed(2)} | '
-      'alpha: ${linear.alpha.toStringAsFixed(3)} | '
-      'gravity: (${linear.gravityX.toStringAsFixed(1)}, ${linear.gravityY.toStringAsFixed(1)}, ${linear.gravityZ.toStringAsFixed(1)}) | '
+      'magnitude: ${magnitude.toStringAsFixed(2)} | '
       'time: $time',
     );
 
-    return addMagnitudeSample(linear.magnitude);
+    return addMagnitudeSample(magnitude);
   }
 
   bool addMagnitudeSample(double magnitude) {
@@ -74,6 +68,5 @@ class MotionDetector {
     _consecutiveLowCount = 0;
     _isMoving = false;
     _recentMagnitudes.clear();
-    _gravityFilter.reset();
   }
 }
