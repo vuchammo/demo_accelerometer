@@ -4,20 +4,27 @@ import 'package:flutter/material.dart';
 
 class MotionDetector {
   final double thresholdMin = 1.0;
-  final double thresholdMax = 5.0;
-  final int requiredConsecutivePoints = 18;
+  final double thresholdMax = 8.0;
+  static const int windowSize = 30;
+  static const int requiredMotionPoints = 28;
+  static const int requiredStillPoints = 30;
 
   final List<double> _recentMagnitudes = [];
   List<double> get recentMagnitudes => List.unmodifiable(_recentMagnitudes);
 
+  final List<double> _magnitudeWindow = [];
+  List<double> get magnitudeWindow => List.unmodifiable(_magnitudeWindow);
+
   bool _isMoving = false;
   bool get isMoving => _isMoving;
 
-  int _consecutiveHighCount = 0;
-  int get consecutiveHighCount => _consecutiveHighCount;
+  int _motionPointsCount = 0;
+  int get motionPointsCount => _motionPointsCount;
+  int get consecutiveHighCount => _motionPointsCount;
 
-  int _consecutiveLowCount = 0;
-  int get consecutiveLowCount => _consecutiveLowCount;
+  int _stillPointsCount = 0;
+  int get stillPointsCount => _stillPointsCount;
+  int get consecutiveLowCount => _stillPointsCount;
 
   bool addSample(double x, double y, double z, DateTime time) {
     final magnitude = sqrt(x * x + y * y + z * z);
@@ -38,35 +45,47 @@ class MotionDetector {
   bool addMagnitudeSample(double magnitude) {
     bool stateChanged = false;
 
-    if (magnitude >= thresholdMin && magnitude <= thresholdMax) {
-      _consecutiveHighCount++;
+    _magnitudeWindow.add(magnitude);
 
-      _consecutiveLowCount = 0;
+    if (_magnitudeWindow.length > windowSize) {
+      _magnitudeWindow.removeAt(0);
+    }
 
-      if (_consecutiveHighCount >= requiredConsecutivePoints && !_isMoving) {
+    int motionCount = 0;
+    int stillCount = 0;
+
+    for (final magnitudeValue in _magnitudeWindow) {
+      if (magnitudeValue >= thresholdMin && magnitudeValue <= thresholdMax) {
+        motionCount++;
+      } else if (magnitudeValue < thresholdMin) {
+        stillCount++;
+      }
+    }
+
+    _motionPointsCount = motionCount;
+    _stillPointsCount = stillCount;
+
+    if (!_isMoving) {
+      if (motionCount >= requiredMotionPoints) {
         _isMoving = true;
         stateChanged = true;
       }
-    } else if (magnitude < thresholdMin) {
-      _consecutiveLowCount++;
-
-      _consecutiveHighCount = 0;
-
-      if (_consecutiveLowCount >= requiredConsecutivePoints && _isMoving) {
+    } else {
+      if (_magnitudeWindow.length >= requiredStillPoints &&
+          stillCount >= requiredStillPoints) {
         _isMoving = false;
         stateChanged = true;
       }
-    } else {
-      _consecutiveHighCount = 0;
-      _consecutiveLowCount = 0;
     }
+
     return stateChanged;
   }
 
   void reset() {
-    _consecutiveHighCount = 0;
-    _consecutiveLowCount = 0;
+    _motionPointsCount = 0;
+    _stillPointsCount = 0;
     _isMoving = false;
     _recentMagnitudes.clear();
+    _magnitudeWindow.clear();
   }
 }
