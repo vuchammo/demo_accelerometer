@@ -75,11 +75,11 @@ class MotionLogEntry {
   String get categoryBadge {
     switch (category) {
       case MotionSampleCategory.motion:
-        return '[MOTION]';
+        return '${AnsiColor.yellow}[MOTION]${AnsiColor.reset}';
       case MotionSampleCategory.still:
-        return '[STILL ]';
+        return '${AnsiColor.green}[STILL ]${AnsiColor.reset}';
       case MotionSampleCategory.spike:
-        return '[SPIKE ]';
+        return '${AnsiColor.red}${AnsiColor.bold}[SPIKE ]${AnsiColor.reset}';
     }
   }
 
@@ -95,20 +95,44 @@ class MotionLogEntry {
     }
   }
 
-  /// Thanh đo trực quan mini (10 ô) biểu diễn độ lớn gia tốc
+  /// Thanh đo trực quan mini (10 ô) biểu diễn độ lớn gia tốc kèm màu sắc ANSI
   String get gaugeBar {
     const int totalBars = 10;
     const double maxDisplay = 10.0;
     final clamped = magnitude.clamp(0.0, maxDisplay);
     final filled = ((clamped / maxDisplay) * totalBars).round();
     final empty = totalBars - filled;
-    return '[${'■' * filled}${'□' * empty}]';
+
+    // Chọn màu dựa vào category mẫu gia tốc
+    final String colorCode;
+    switch (category) {
+      case MotionSampleCategory.still:
+        colorCode = AnsiColor.green;
+        break;
+      case MotionSampleCategory.motion:
+        colorCode = AnsiColor.yellow;
+        break;
+      case MotionSampleCategory.spike:
+        colorCode = AnsiColor.red;
+        break;
+    }
+
+    final filledPart = filled > 0
+        ? '$colorCode${'■' * filled}${AnsiColor.reset}'
+        : '';
+    final emptyPart = empty > 0
+        ? '${AnsiColor.gray}${'□' * empty}${AnsiColor.reset}'
+        : '';
+
+    return '[$filledPart$emptyPart]';
   }
 
   /// Định dạng log 1 dòng trực quan cho Console
   String formatConsoleLine() {
     final magStr = magnitude.toStringAsFixed(2).padLeft(5);
-    final stateStr = isMoving ? 'MOVING' : 'STILL';
+    final stateStr = isMoving
+        ? '${AnsiColor.yellow}MOVING${AnsiColor.reset}'
+        : '${AnsiColor.cyan}STILL${AnsiColor.reset}';
     final progressStr = isMoving
         ? '$stillCount/$requiredPoints'
         : '$motionCount/$requiredPoints';
@@ -120,17 +144,31 @@ class MotionLogEntry {
   String formatStateChangeBanner() {
     final fromState = previousState ? 'ĐANG CHUYỂN ĐỘNG' : 'ĐANG ĐỨNG YÊN';
     final toState = isMoving ? 'CÓ CHUYỂN ĐỘNG' : 'DỪNG CHUYỂN ĐỘNG';
+    final stateColor = isMoving ? AnsiColor.yellow : AnsiColor.cyan;
     final reason =
         triggerReason ??
         (isMoving ? 'Đủ điểm chuyển động' : 'Đủ điểm đứng yên');
     final magStr = magnitude.toStringAsFixed(2);
 
     return '''
-╔══════════════════════════════════════════════════════════════════════════╗
+${AnsiColor.bold}$stateColor╔══════════════════════════════════════════════════════════════════════════╗
 ║ ⚡ [STATE CHANGED] $fromState  ➔  $toState
 ║ ⏱ Thời gian     : $formattedTime
 ║ 🎯 Lý do         : $reason
 ║ 📊 Mag kích hoạt : $magStr m/s²
-╚══════════════════════════════════════════════════════════════════════════╝''';
+╚══════════════════════════════════════════════════════════════════════════╝${AnsiColor.reset}''';
   }
+}
+
+/// Bảng mã màu ANSI escape sequences dùng để tô màu console log
+abstract class AnsiColor {
+  static const String reset = '\x1B[0m';
+  static const String bold = '\x1B[1m';
+  static const String red = '\x1B[31m';
+  static const String green = '\x1B[32m';
+  static const String yellow = '\x1B[33m';
+  static const String blue = '\x1B[34m';
+  static const String magenta = '\x1B[35m';
+  static const String cyan = '\x1B[36m';
+  static const String gray = '\x1B[90m';
 }
