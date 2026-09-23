@@ -6,16 +6,12 @@ class MotionDetector {
   final double thresholdMin = 1.0;
   final double thresholdMax = 8.0;
   static const int windowSize = 30;
-  static const int requiredMotionPoints = 28;
-  static const int requiredStillPoints = 30;
+  static const int requiredPoints = 28;
 
-  /// Cấp độ log hiện tại (mặc định verbose để theo dõi đầy đủ khi debug)
   MotionLogLevel logLevel = MotionLogLevel.verbose;
 
-  /// Callback tùy chọn khi có mẫu log mới được tạo
   void Function(MotionLogEntry entry)? onLog;
 
-  /// Tùy biến hàm in log (mặc định dùng print)
   void Function(String message)? logPrinter;
 
   final List<double> _recentMagnitudes = [];
@@ -38,7 +34,6 @@ class MotionDetector {
   int _samplesSinceLastSummary = 0;
   DateTime? _lastSummaryTime;
 
-  /// Kiểm tra ứng dụng có đang chạy chế độ debug hay không (thuần Dart)
   static bool get isDebugMode {
     bool inDebug = false;
     assert(() {
@@ -48,7 +43,6 @@ class MotionDetector {
     return inDebug;
   }
 
-  /// Thêm mẫu cảm biến đầy đủ tọa độ x, y, z và thời gian
   bool addSample(double x, double y, double z, DateTime time) {
     final magnitude = sqrt(x * x + y * y + z * z);
 
@@ -60,7 +54,6 @@ class MotionDetector {
     return _processSample(magnitude: magnitude, x: x, y: y, z: z, time: time);
   }
 
-  /// Thêm mẫu độ lớn magnitude trực tiếp
   bool addMagnitudeSample(double magnitude) {
     return _processSample(
       magnitude: magnitude,
@@ -71,7 +64,6 @@ class MotionDetector {
     );
   }
 
-  /// Xử lý mẫu gia tốc và thuật toán cửa sổ trượt
   bool _processSample({
     required double magnitude,
     double? x,
@@ -103,19 +95,19 @@ class MotionDetector {
     _stillPointsCount = stillCount;
 
     if (!_isMoving) {
-      if (motionCount >= requiredMotionPoints) {
+      if (motionCount >= requiredPoints) {
         _isMoving = true;
         stateChanged = true;
         triggerReason =
-            'Đạt $motionCount/$windowSize điểm chuyển động (yêu cầu >= $requiredMotionPoints)';
+            'Đạt $motionCount/$windowSize điểm chuyển động (yêu cầu >= $requiredPoints)';
       }
     } else {
-      if (_magnitudeWindow.length >= requiredStillPoints &&
-          stillCount >= requiredStillPoints) {
+      if (_magnitudeWindow.length >= requiredPoints &&
+          stillCount >= requiredPoints) {
         _isMoving = false;
         stateChanged = true;
         triggerReason =
-            'Đạt $stillCount/$requiredStillPoints điểm đứng yên liên tiếp';
+            'Đạt $stillCount/$windowSize điểm đứng yên (yêu cầu >= $requiredPoints)';
       }
     }
 
@@ -143,32 +135,26 @@ class MotionDetector {
       stateChanged: stateChanged,
       triggerReason: triggerReason,
       previousState: previousState,
-      requiredMotionPoints: requiredMotionPoints,
-      requiredStillPoints: requiredStillPoints,
+      requiredPoints: requiredPoints,
     );
 
-    // Phát log ra Console và Callback khi đang ở chế độ debug
     _emitLog(entry);
 
     return stateChanged;
   }
 
-  /// Quản lý xuất log dựa trên cấp độ logLevel
   void _emitLog(MotionLogEntry entry) {
     onLog?.call(entry);
 
-    // Chỉ in log ra console khi đang ở chế độ debug và logLevel != none
     if (!isDebugMode || logLevel == MotionLogLevel.none) return;
 
     final printer = logPrinter ?? print;
 
-    // 1. Khi đổi trạng thái: luôn in banner nổi bật
     if (entry.stateChanged) {
       printer(entry.formatStateChangeBanner());
       return;
     }
 
-    // 2. Cấp độ stateOnly: chỉ in thêm nếu gặp Spike bất thường
     if (logLevel == MotionLogLevel.stateOnly) {
       if (entry.category == MotionSampleCategory.spike) {
         printer(entry.formatConsoleLine());
@@ -176,7 +162,6 @@ class MotionDetector {
       return;
     }
 
-    // 3. Cấp độ summary: định kỳ tóm tắt sau mỗi 1 giây hoặc 15 mẫu
     if (logLevel == MotionLogLevel.summary) {
       _samplesSinceLastSummary++;
       final now = entry.timestamp;
@@ -193,13 +178,11 @@ class MotionDetector {
       return;
     }
 
-    // 4. Cấp độ verbose: in từng mẫu gọn gàng
     if (logLevel == MotionLogLevel.verbose) {
       printer(entry.formatConsoleLine());
     }
   }
 
-  /// Tạo dòng tóm tắt thông số cửa sổ trượt
   String _formatSummaryLine(MotionLogEntry entry) {
     if (_magnitudeWindow.isEmpty) return '';
     double min = _magnitudeWindow.first;
@@ -213,10 +196,9 @@ class MotionDetector {
     final avg = sum / _magnitudeWindow.length;
     final timeStr = entry.formattedTime;
     final stateStr = entry.isMoving ? 'MOVING' : 'STILL';
-    return '[$timeStr] [SUMMARY] Avg: ${avg.toStringAsFixed(2)} (Min: ${min.toStringAsFixed(2)}, Max: ${max.toStringAsFixed(2)}) | Window: [${entry.motionCount}/$requiredMotionPoints | ${entry.stillCount}/$requiredStillPoints] | State: $stateStr';
+    return '[$timeStr] [SUMMARY] Avg: ${avg.toStringAsFixed(2)} (Min: ${min.toStringAsFixed(2)}, Max: ${max.toStringAsFixed(2)}) | Window: [${entry.motionCount}/$requiredPoints | ${entry.stillCount}/$requiredPoints] | State: $stateStr';
   }
 
-  /// Reset toàn bộ trạng thái cảm biến và log
   void reset() {
     _motionPointsCount = 0;
     _stillPointsCount = 0;

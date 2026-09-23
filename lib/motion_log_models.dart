@@ -40,8 +40,7 @@ class MotionLogEntry {
   final bool stateChanged;
   final String? triggerReason;
   final bool previousState;
-  final int requiredMotionPoints;
-  final int requiredStillPoints;
+  final int requiredPoints;
 
   const MotionLogEntry({
     required this.timestamp,
@@ -57,9 +56,11 @@ class MotionLogEntry {
     required this.stateChanged,
     this.triggerReason,
     required this.previousState,
-    required this.requiredMotionPoints,
-    required this.requiredStillPoints,
+    required this.requiredPoints,
   });
+
+  int get requiredMotionPoints => requiredPoints;
+  int get requiredStillPoints => requiredPoints;
 
   /// Định dạng giờ phút giây và mili-giây: HH:mm:ss.SSS
   String get formattedTime {
@@ -109,8 +110,8 @@ class MotionLogEntry {
     final magStr = magnitude.toStringAsFixed(2).padLeft(5);
     final stateStr = isMoving ? 'MOVING' : 'STILL';
     final progressStr = isMoving
-        ? '$stillCount/$requiredStillPoints'
-        : '$motionCount/$requiredMotionPoints';
+        ? '$stillCount/$requiredPoints'
+        : '$motionCount/$requiredPoints';
 
     return '[$formattedTime] $categoryBadge Mag: $magStr m/s² $gaugeBar | [$progressStr] | $stateStr';
   }
