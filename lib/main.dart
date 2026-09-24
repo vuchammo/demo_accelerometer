@@ -115,7 +115,55 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
             );
   }
 
+  void _stopListening() {
+    if (_isRecording) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Vui lòng dừng phiên ghi trước khi dừng lắng nghe cảm biến.',
+          ),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (_isCountingDown) {
+      _cancelCountdown();
+    }
+
+    _subscription?.cancel();
+    setState(() {
+      _subscription = null;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Đã dừng lắng nghe cảm biến gia tốc'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _startListeningFromUI() {
+    if (_subscription != null) return;
+
+    _stateChangedTime = DateTime.now();
+    _startListening();
+    setState(() {});
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Đã bắt đầu lắng nghe cảm biến gia tốc'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
   void _onPressStartRecording() {
+    if (_subscription == null) {
+      _startListening();
+    }
     if (_startDelaySeconds > 0) {
       setState(() {
         _isCountingDown = true;
@@ -158,6 +206,9 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   }
 
   void _startRecording() {
+    if (_subscription == null) {
+      _startListening();
+    }
     setState(() {
       _isRecording = true;
       _recordingStartTime = DateTime.now();
@@ -311,16 +362,17 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
 
   @override
   Widget build(BuildContext context) {
+    final isListening = _subscription != null;
     final isMoving = _detector.isMoving;
     final currentDuration = DateTime.now().difference(_stateChangedTime);
 
-    final backgroundColor = isMoving
-        ? Colors.green.shade600
-        : Colors.red.shade600;
+    final backgroundColor = !isListening
+        ? const Color(0xFF475569)
+        : (isMoving ? Colors.green.shade600 : Colors.red.shade600);
 
-    final shadowColor = (isMoving ? Colors.green : Colors.red).withValues(
-      alpha: 0.35,
-    );
+    final shadowColor = !isListening
+        ? Colors.blueGrey.withValues(alpha: 0.35)
+        : (isMoving ? Colors.green : Colors.red).withValues(alpha: 0.35);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F8FA),
@@ -330,6 +382,26 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
           style: TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            icon: Icon(
+              isListening
+                  ? Icons.sensors_rounded
+                  : Icons.sensors_off_rounded,
+              color: isListening
+                  ? const Color(0xFF0F766E)
+                  : Colors.grey.shade400,
+            ),
+            tooltip: isListening
+                ? 'Dừng lắng nghe gia tốc'
+                : 'Bắt đầu lắng nghe gia tốc',
+            onPressed: () {
+              if (isListening) {
+                _stopListening();
+              } else {
+                _startListeningFromUI();
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.laptop_chromebook),
             tooltip: 'Xem trên máy tính (Wi-Fi)',
@@ -379,30 +451,67 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(
-                            isMoving ? 'Có chuyển động' : 'Không chuyển động',
-                            style: const TextStyle(
-                              fontSize: 24.0,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              letterSpacing: 0.5,
+                          if (!isListening) ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.pause_circle_filled_rounded,
+                                  color: Colors.amber.shade300,
+                                  size: 26.0,
+                                ),
+                                const SizedBox(width: 8.0),
+                                const Text(
+                                  'Đã dừng lắng nghe',
+                                  style: TextStyle(
+                                    fontSize: 22.0,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    letterSpacing: 0.5,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
                             ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 8.0),
-                          Text(
-                            _formatDuration(currentDuration),
-                            style: const TextStyle(
-                              fontSize: 52.0,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              letterSpacing: 1.0,
-                              fontFeatures: [FontFeature.tabularFigures()],
+                            const SizedBox(height: 8.0),
+                            const Text(
+                              'TẠM DỪNG',
+                              style: TextStyle(
+                                fontSize: 38.0,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white70,
+                                letterSpacing: 2.0,
+                              ),
                             ),
-                          ),
+                          ] else ...[
+                            Text(
+                              isMoving ? 'Có chuyển động' : 'Không chuyển động',
+                              style: const TextStyle(
+                                fontSize: 24.0,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                                letterSpacing: 0.5,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 8.0),
+                            Text(
+                              _formatDuration(currentDuration),
+                              style: const TextStyle(
+                                fontSize: 52.0,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 1.0,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
+                    const SizedBox(height: 14.0),
+                    // Thẻ điều khiển Lắng nghe cảm biến gia tốc
+                    _buildSensorListeningControlCard(),
                     const SizedBox(height: 14.0),
                     // Khu vực điều khiển ghi dữ liệu
                     _buildRecordingControlCard(),
@@ -769,6 +878,163 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Thẻ điều khiển trạng thái lắng nghe cảm biến gia tốc (Dừng / Bắt đầu)
+  Widget _buildSensorListeningControlCard() {
+    final isListening = _subscription != null;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18.0),
+        border: Border.all(
+          color: isListening ? Colors.teal.shade200 : Colors.amber.shade300,
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isListening
+                ? Colors.teal.withValues(alpha: 0.05)
+                : Colors.amber.withValues(alpha: 0.08),
+            blurRadius: 10.0,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42.0,
+            height: 42.0,
+            decoration: BoxDecoration(
+              color: isListening ? Colors.teal.shade50 : Colors.amber.shade50,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color:
+                    isListening ? Colors.teal.shade300 : Colors.amber.shade400,
+                width: 1.2,
+              ),
+            ),
+            child: Icon(
+              isListening ? Icons.sensors_rounded : Icons.sensors_off_rounded,
+              color: isListening
+                  ? const Color(0xFF0F766E)
+                  : Colors.amber.shade900,
+              size: 22.0,
+            ),
+          ),
+          const SizedBox(width: 12.0),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        'Cảm biến gia tốc',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade900,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6.0),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6.0,
+                        vertical: 1.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isListening
+                            ? Colors.teal.shade50
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(6.0),
+                        border: Border.all(
+                          color: isListening
+                              ? Colors.teal.shade300
+                              : Colors.grey.shade300,
+                        ),
+                      ),
+                      child: Text(
+                        isListening ? 'Đang bật' : 'Đã tắt',
+                        style: TextStyle(
+                          fontSize: 10.0,
+                          fontWeight: FontWeight.bold,
+                          color: isListening
+                              ? Colors.teal.shade800
+                              : Colors.grey.shade700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3.0),
+                Text(
+                  isListening
+                      ? 'Đang nhận dữ liệu (10Hz)'
+                      : 'Đã tạm dừng nhận tín hiệu',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: Colors.grey.shade600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8.0),
+          SizedBox(
+            height: 38.0,
+            child: isListening
+                ? OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red.shade700,
+                      side: BorderSide(color: Colors.red.shade300),
+                      padding: const EdgeInsets.symmetric(horizontal: 10.0),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10.0),
+                      ),
+                    ),
+                    icon: const Icon(Icons.pause_rounded, size: 18.0),
+                    label: const Text(
+                      'Dừng',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.0,
+                      ),
+                    ),
+                    onPressed: _stopListening,
+                  )
+                : FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF0F766E),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 10.0),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10.0),
+                      ),
+                    ),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 18.0),
+                    label: const Text(
+                      'Bắt đầu',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.0,
+                      ),
+                    ),
+                    onPressed: _startListeningFromUI,
+                  ),
+          ),
+        ],
       ),
     );
   }
