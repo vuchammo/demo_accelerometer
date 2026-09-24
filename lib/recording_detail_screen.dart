@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'chart_data_point.dart';
 import 'database/recording_database.dart';
 import 'database/recording_session.dart';
+import 'web_server/web_share_sheet.dart';
 
 class RecordingDetailScreen extends StatefulWidget {
   final RecordingSession session;
@@ -19,6 +20,8 @@ class RecordingDetailScreen extends StatefulWidget {
 class _RecordingDetailScreenState extends State<RecordingDetailScreen> {
   late Future<List<ChartDataPoint>> _dataPointsFuture;
   late final TransformationController _transformationController;
+  late RecordingSession _session;
+  bool _hasModified = false;
 
   bool _showAvg = false;
   bool _showDots = true;
@@ -36,6 +39,7 @@ class _RecordingDetailScreenState extends State<RecordingDetailScreen> {
   @override
   void initState() {
     super.initState();
+    _session = widget.session;
     _transformationController = TransformationController();
     _loadData();
   }
@@ -76,6 +80,126 @@ class _RecordingDetailScreenState extends State<RecordingDetailScreen> {
     _transformationController.value = Matrix4.identity();
   }
 
+  Future<void> _showEditTagDialog() async {
+    final controller = TextEditingController(text: _session.label ?? '');
+    final savedTags = await RecordingDatabase.instance.getSavedTags();
+    if (!mounted) return;
+
+    final newTag = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.label_outline, color: Colors.indigo.shade700),
+                const SizedBox(width: 8.0),
+                const Text('Gắn tag cho phiên'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tên tag',
+                    hintText: 'Nhập tên tag...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10.0),
+                    ),
+                    suffixIcon: controller.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 16),
+                            onPressed: () {
+                              controller.clear();
+                              setDialogState(() {});
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                if (savedTags.isNotEmpty) ...[
+                  const SizedBox(height: 12.0),
+                  Text(
+                    'Tag đã dùng trước đó:',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 6.0),
+                  Wrap(
+                    spacing: 6.0,
+                    runSpacing: 6.0,
+                    children: savedTags.map((s) {
+                      final isSelected =
+                          controller.text.trim().toLowerCase() ==
+                          s.toLowerCase();
+                      return ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '#$s',
+                          style: const TextStyle(fontSize: 11.5),
+                        ),
+                        backgroundColor: isSelected
+                            ? Colors.indigo.shade100
+                            : Colors.grey.shade100,
+                        onPressed: () {
+                          controller.text = isSelected ? '' : s;
+                          setDialogState(() {});
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              if (_session.label != null && _session.label!.isNotEmpty)
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  onPressed: () => Navigator.of(ctx).pop(''),
+                  child: const Text('Xóa tag'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Hủy'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+                child: const Text('Lưu'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (newTag != null && mounted && _session.id != null) {
+      final clean = newTag.isEmpty ? null : newTag;
+      await RecordingDatabase.instance.updateSessionLabel(_session.id!, clean);
+      setState(() {
+        _session = _session.copyWith(label: clean);
+        _hasModified = true;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              clean == null ? 'Đã xóa tag' : 'Đã gắn tag "#$clean"',
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _confirmDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -106,58 +230,154 @@ class _RecordingDetailScreenState extends State<RecordingDetailScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final session = widget.session;
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF6F8FA),
-      appBar: AppBar(
-        title: Text(
-          session.formattedStartTime,
-          style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+  Widget _buildTagBanner() {
+    final hasTag = _session.label != null && _session.label!.isNotEmpty;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12.0),
+      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14.0),
+        border: Border.all(
+          color: hasTag ? Colors.indigo.shade100 : Colors.grey.shade200,
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-            tooltip: 'Xóa phiên ghi',
-            onPressed: _confirmDelete,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 6.0,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-      body: FutureBuilder<List<ChartDataPoint>>(
-        future: _dataPointsFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final points = snapshot.data ?? [];
-
-          // Tìm max magnitude để hiển thị thống kê
-          double maxMag = 0.0;
-          for (final p in points) {
-            if (p.magnitude > maxMag) maxMag = p.magnitude;
-          }
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16.0,
-              vertical: 16.0,
+      child: Row(
+        children: [
+          Icon(
+            hasTag ? Icons.label : Icons.label_outline,
+            size: 18.0,
+            color: hasTag ? Colors.indigo.shade700 : Colors.grey.shade500,
+          ),
+          const SizedBox(width: 8.0),
+          Text(
+            'Tag: ',
+            style: TextStyle(
+              fontSize: 13.0,
+              fontWeight: FontWeight.w500,
+              color: Colors.grey.shade600,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Thống kê 4 chỉ số chính của phiên
-                _buildStatsGrid(session, points.length, maxMag),
-                const SizedBox(height: 16.0),
-
-                // Biểu đồ chi tiết toàn bộ phiên ghi với zoom & đường dóng
-                _buildChartSection(points, session, maxMag),
-              ],
+          ),
+          Expanded(
+            child: Text(
+              hasTag ? '#${_session.label}' : 'Chưa có tag (chạm để thêm)',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: hasTag ? FontWeight.bold : FontWeight.normal,
+                color: hasTag ? Colors.indigo.shade800 : Colors.grey.shade400,
+              ),
             ),
-          );
-        },
+          ),
+          InkWell(
+            borderRadius: BorderRadius.circular(8.0),
+            onTap: _showEditTagDialog,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 8.0,
+                vertical: 4.0,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    hasTag ? Icons.edit_outlined : Icons.add,
+                    size: 15.0,
+                    color: Colors.blue.shade700,
+                  ),
+                  const SizedBox(width: 4.0),
+                  Text(
+                    hasTag ? 'Đổi' : 'Thêm',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        Navigator.of(context).pop(_hasModified);
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF6F8FA),
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(_hasModified),
+          ),
+          title: Text(
+            _session.formattedStartTime,
+            style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.laptop_chromebook),
+              tooltip: 'Xem trên máy tính (Wi-Fi)',
+              onPressed: () => WebShareSheet.show(context),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              tooltip: 'Xóa phiên ghi',
+              onPressed: _confirmDelete,
+            ),
+          ],
+        ),
+        body: FutureBuilder<List<ChartDataPoint>>(
+          future: _dataPointsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final points = snapshot.data ?? [];
+
+            // Tìm max magnitude để hiển thị thống kê
+            double maxMag = 0.0;
+            for (final p in points) {
+              if (p.magnitude > maxMag) maxMag = p.magnitude;
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 16.0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Thẻ Tag / Nhãn
+                  _buildTagBanner(),
+
+                  // Thống kê 4 chỉ số chính của phiên
+                  _buildStatsGrid(_session, points.length, maxMag),
+                  const SizedBox(height: 16.0),
+
+                  // Biểu đồ chi tiết toàn bộ phiên ghi với zoom & đường dóng
+                  _buildChartSection(points, _session, maxMag),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

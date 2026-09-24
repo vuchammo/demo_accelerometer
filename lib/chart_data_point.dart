@@ -49,4 +49,14 @@ class ChartDataPoint {
       'is_moving': isMoving ? 1 : 0,
     };
   }
+
+  /// Chuyển sang JSON để truyền qua Web API
+  Map<String, dynamic> toJson() {
+    return {
+      'relative_time': relativeTime,
+      'magnitude': magnitude,
+      'category': category.name,
+      'is_moving': isMoving,
+    };
+  }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'database/recording_database.dart';
 import 'database/recording_session.dart';
 import 'recording_detail_screen.dart';
+import 'web_server/web_share_sheet.dart';
 
 class RecordingHistoryScreen extends StatefulWidget {
   const RecordingHistoryScreen({super.key});
@@ -13,11 +14,19 @@ class RecordingHistoryScreen extends StatefulWidget {
 
 class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
   late Future<List<RecordingSession>> _sessionsFuture;
+  final TextEditingController _searchController = TextEditingController();
+  String? _selectedTag;
 
   @override
   void initState() {
     super.initState();
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _refresh() {
@@ -64,8 +73,126 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
       await RecordingDatabase.instance.deleteSession(session.id!);
       _refresh();
       if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Đã xóa phiên ghi')));
+      }
+    }
+  }
+
+  Future<void> _showEditTagDialog(RecordingSession session) async {
+    final controller = TextEditingController(text: session.label ?? '');
+    final savedTags = await RecordingDatabase.instance.getSavedTags();
+    if (!mounted) return;
+
+    final newTag = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(Icons.label_outline, color: Colors.indigo.shade700),
+                const SizedBox(width: 8.0),
+                const Text('Gắn tag cho phiên'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Tên tag',
+                    hintText: 'Nhập tên tag...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10.0),
+                    ),
+                    suffixIcon: controller.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 16),
+                            onPressed: () {
+                              controller.clear();
+                              setDialogState(() {});
+                            },
+                          )
+                        : null,
+                  ),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                if (savedTags.isNotEmpty) ...[
+                  const SizedBox(height: 12.0),
+                  Text(
+                    'Tag đã dùng trước đó:',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 6.0),
+                  Wrap(
+                    spacing: 6.0,
+                    runSpacing: 6.0,
+                    children: savedTags.map((s) {
+                      final isSelected =
+                          controller.text.trim().toLowerCase() == s.toLowerCase();
+                      return ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '#$s',
+                          style: const TextStyle(fontSize: 11.5),
+                        ),
+                        backgroundColor: isSelected
+                            ? Colors.indigo.shade100
+                            : Colors.grey.shade100,
+                        onPressed: () {
+                          controller.text = isSelected ? '' : s;
+                          setDialogState(() {});
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              if (session.label != null && session.label!.isNotEmpty)
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  onPressed: () => Navigator.of(ctx).pop(''),
+                  child: const Text('Xóa tag'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(null),
+                child: const Text('Hủy'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+                child: const Text('Lưu'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (newTag != null && mounted && session.id != null) {
+      await RecordingDatabase.instance.updateSessionLabel(
+        session.id!,
+        newTag.isEmpty ? null : newTag,
+      );
+      _refresh();
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Đã xóa phiên ghi')),
+          SnackBar(
+            content: Text(
+              newTag.isEmpty ? 'Đã xóa tag' : 'Đã gắn tag "#$newTag"',
+            ),
+            duration: const Duration(seconds: 2),
+          ),
         );
       }
     }
@@ -81,6 +208,11 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
           style: TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.laptop_chromebook),
+            tooltip: 'Xem trên máy tính (Wi-Fi)',
+            onPressed: () => WebShareSheet.show(context),
+          ),
           IconButton(
             icon: const Icon(Icons.delete_sweep_outlined),
             tooltip: 'Xóa tất cả',
@@ -99,9 +231,9 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
               return const Center(child: CircularProgressIndicator());
             }
 
-            final sessions = snapshot.data ?? [];
+            final allSessions = snapshot.data ?? [];
 
-            if (sessions.isEmpty) {
+            if (allSessions.isEmpty) {
               return Center(
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -149,14 +281,115 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
               );
             }
 
-            return ListView.separated(
-              padding: const EdgeInsets.all(16.0),
-              itemCount: sessions.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12.0),
-              itemBuilder: (context, index) {
-                final session = sessions[index];
-                return _buildSessionCard(session);
-              },
+            // Danh sách unique tags
+            final uniqueTags =
+                allSessions
+                    .map((s) => s.label?.trim())
+                    .where((l) => l != null && l.isNotEmpty)
+                    .cast<String>()
+                    .toSet()
+                    .toList()
+                  ..sort();
+
+            // Lọc danh sách theo tag và search query
+            final query = _searchController.text.trim().toLowerCase();
+            final filteredSessions = allSessions.where((s) {
+              if (_selectedTag != null && _selectedTag!.isNotEmpty) {
+                if (s.label?.trim().toLowerCase() !=
+                    _selectedTag!.toLowerCase()) {
+                  return false;
+                }
+              }
+              if (query.isNotEmpty) {
+                final labelMatch =
+                    s.label?.toLowerCase().contains(query) ?? false;
+                final dateMatch = s.formattedStartTime.toLowerCase().contains(
+                  query,
+                );
+                final idMatch = s.id?.toString() == query;
+                if (!labelMatch && !dateMatch && !idMatch) {
+                  return false;
+                }
+              }
+              return true;
+            }).toList();
+
+            return Column(
+              children: [
+                // Khung tìm kiếm theo tag hoặc ngày giờ
+                _buildSearchBar(),
+
+                // Dải filter tags nếu có ít nhất 1 tag
+                if (uniqueTags.isNotEmpty) _buildTagChips(uniqueTags),
+
+                // Danh sách kết quả
+                Expanded(
+                  child: filteredSessions.isEmpty
+                      ? Center(
+                          child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            child: Padding(
+                              padding: const EdgeInsets.all(32.0),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.search_off_rounded,
+                                    size: 48,
+                                    color: Colors.grey.shade400,
+                                  ),
+                                  const SizedBox(height: 12.0),
+                                  Text(
+                                    'Không tìm thấy phiên ghi phù hợp',
+                                    style: TextStyle(
+                                      fontSize: 16.0,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.grey.shade800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6.0),
+                                  Text(
+                                    _selectedTag != null
+                                        ? 'Không có kết quả cho tag "#$_selectedTag"'
+                                        : 'Thử tìm với từ khóa khác',
+                                    style: TextStyle(
+                                      fontSize: 13.0,
+                                      color: Colors.grey.shade600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16.0),
+                                  OutlinedButton.icon(
+                                    icon: const Icon(Icons.clear_all, size: 18),
+                                    label: const Text('Xóa bộ lọc'),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() {
+                                        _selectedTag = null;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(
+                            16.0,
+                            4.0,
+                            16.0,
+                            16.0,
+                          ),
+                          itemCount: filteredSessions.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 12.0),
+                          itemBuilder: (context, index) {
+                            final session = filteredSessions[index];
+                            return _buildSessionCard(session);
+                          },
+                        ),
+                ),
+              ],
             );
           },
         ),
@@ -164,7 +397,117 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
     );
   }
 
+  Widget _buildSearchBar() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16.0, 10.0, 16.0, 8.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8.0,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: 'Tìm theo tag, ngày giờ...',
+          hintStyle: TextStyle(fontSize: 13.5, color: Colors.grey.shade400),
+          prefixIcon: Icon(
+            Icons.search,
+            size: 20.0,
+            color: Colors.grey.shade600,
+          ),
+          suffixIcon: _searchController.text.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.close, size: 18.0),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {});
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14.0,
+            vertical: 11.0,
+          ),
+        ),
+        style: const TextStyle(fontSize: 13.5),
+        onChanged: (_) => setState(() {}),
+      ),
+    );
+  }
+
+  Widget _buildTagChips(List<String> tags) {
+    return Container(
+      height: 38.0,
+      margin: const EdgeInsets.only(bottom: 8.0),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+        itemCount: tags.length + 1,
+        separatorBuilder: (_, __) => const SizedBox(width: 8.0),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            final isSelected = _selectedTag == null;
+            return ChoiceChip(
+              label: const Text('Tất cả'),
+              selected: isSelected,
+              onSelected: (_) {
+                setState(() {
+                  _selectedTag = null;
+                });
+              },
+              selectedColor: Colors.blue.shade100,
+              labelStyle: TextStyle(
+                fontSize: 12.0,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.blue.shade900 : Colors.grey.shade700,
+              ),
+              side: BorderSide(
+                color: isSelected ? Colors.blue.shade400 : Colors.grey.shade300,
+              ),
+            );
+          }
+
+          final tag = tags[index - 1];
+          final isSelected = _selectedTag?.toLowerCase() == tag.toLowerCase();
+          return ChoiceChip(
+            avatar: Icon(
+              Icons.label_outline,
+              size: 13.0,
+              color: isSelected ? Colors.indigo.shade800 : Colors.grey.shade600,
+            ),
+            label: Text('#$tag'),
+            selected: isSelected,
+            onSelected: (_) {
+              setState(() {
+                _selectedTag = isSelected ? null : tag;
+              });
+            },
+            selectedColor: Colors.indigo.shade100,
+            labelStyle: TextStyle(
+              fontSize: 12.0,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? Colors.indigo.shade900 : Colors.grey.shade700,
+            ),
+            side: BorderSide(
+              color: isSelected ? Colors.indigo.shade400 : Colors.grey.shade300,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildSessionCard(RecordingSession session) {
+    final hasTag = session.label != null && session.label!.isNotEmpty;
+
     return Dismissible(
       key: ValueKey(session.id ?? session.startTime.toIso8601String()),
       direction: DismissDirection.endToStart,
@@ -200,36 +543,82 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top row: thời gian + icon chi tiết
+                // Top row: tag, thời gian + nút đổi tag + chevron
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.calendar_today_outlined,
-                          size: 15.0,
-                          color: Colors.blue.shade700,
+                    if (hasTag) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 3.0,
                         ),
-                        const SizedBox(width: 8.0),
-                        Text(
-                          session.formattedStartTime,
-                          style: TextStyle(
-                            fontSize: 14.0,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade900,
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.shade50,
+                          borderRadius: BorderRadius.circular(8.0),
+                          border: Border.all(
+                            color: Colors.indigo.shade200,
+                            width: 0.8,
                           ),
                         ),
-                      ],
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.label,
+                              size: 11.0,
+                              color: Colors.indigo.shade700,
+                            ),
+                            const SizedBox(width: 4.0),
+                            Text(
+                              '#${session.label}',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.indigo.shade800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8.0),
+                    ],
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      size: 13.0,
+                      color: Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 5.0),
+                    Expanded(
+                      child: Text(
+                        session.formattedStartTime,
+                        style: TextStyle(
+                          fontSize: 13.0,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade800,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        hasTag ? Icons.edit_outlined : Icons.new_label_outlined,
+                        size: 17.0,
+                        color: hasTag
+                            ? Colors.indigo.shade400
+                            : Colors.grey.shade400,
+                      ),
+                      tooltip: hasTag ? 'Đổi tag' : 'Thêm tag',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _showEditTagDialog(session),
                     ),
                     Icon(
                       Icons.chevron_right_rounded,
                       color: Colors.grey.shade400,
-                      size: 22.0,
+                      size: 20.0,
                     ),
                   ],
                 ),
-                const SizedBox(height: 14.0),
+                const SizedBox(height: 12.0),
                 // Stats row
                 Row(
                   children: [

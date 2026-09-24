@@ -50,6 +50,8 @@ class RecordingSession {
     };
   }
 
+  Map<String, dynamic> toJson() => toMap();
+
   factory RecordingSession.fromMap(Map<String, dynamic> map) {
     return RecordingSession(
       id: map['id'] as int?,
@@ -60,6 +62,28 @@ class RecordingSession {
       avgMagnitude: (map['avg_magnitude'] as num).toDouble(),
       motionPercentage: (map['motion_percentage'] as num).toDouble(),
       label: map['label'] as String?,
+    );
+  }
+
+  RecordingSession copyWith({
+    int? id,
+    DateTime? startTime,
+    DateTime? endTime,
+    int? durationMs,
+    int? totalSamples,
+    double? avgMagnitude,
+    double? motionPercentage,
+    String? label,
+  }) {
+    return RecordingSession(
+      id: id ?? this.id,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      durationMs: durationMs ?? this.durationMs,
+      totalSamples: totalSamples ?? this.totalSamples,
+      avgMagnitude: avgMagnitude ?? this.avgMagnitude,
+      motionPercentage: motionPercentage ?? this.motionPercentage,
+      label: label ?? this.label,
     );
   }
 }

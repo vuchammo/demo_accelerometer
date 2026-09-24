@@ -13,6 +13,7 @@ import 'motion_chart_widget.dart';
 import 'motion_log_models.dart';
 import 'notification_service.dart';
 import 'recording_history_screen.dart';
+import 'web_server/web_share_sheet.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -58,6 +59,8 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   Duration _recordingElapsed = Duration.zero;
   Timer? _recordingTimer;
   bool _isSaving = false;
+  final TextEditingController _tagController = TextEditingController();
+  List<String> _userSavedTags = [];
 
   @override
   void initState() {
@@ -65,11 +68,21 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     NotificationService.instance.init();
     ForegroundServiceManager.instance.startService();
     _startListening();
+    _loadSavedTags();
     _clockTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) {
         setState(() {});
       }
     });
+  }
+
+  Future<void> _loadSavedTags() async {
+    final tags = await RecordingDatabase.instance.getSavedTags();
+    if (mounted) {
+      setState(() {
+        _userSavedTags = tags;
+      });
+    }
   }
 
   void _startListening() {
@@ -203,6 +216,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
         .length;
     final motionPercentage = (motionCount / totalSamples) * 100.0;
 
+    final tagText = _tagController.text.trim();
     final session = RecordingSession(
       startTime: startTime,
       endTime: endTime,
@@ -210,11 +224,15 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
       totalSamples: totalSamples,
       avgMagnitude: avgMag,
       motionPercentage: motionPercentage,
+      label: tagText.isNotEmpty ? tagText : null,
     );
 
     try {
       final sessionId = await RecordingDatabase.instance.insertSession(session);
       await RecordingDatabase.instance.insertDataPoints(sessionId, points);
+      if (tagText.isNotEmpty) {
+        _loadSavedTags();
+      }
 
       // Phát thông báo khi đã dừng và lưu phiên
       await NotificationService.instance.showRecordingStoppedNotification(
@@ -229,16 +247,17 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Đã lưu phiên: $totalSamples mẫu (${(durationMs / 1000).toStringAsFixed(1)}s)',
+              'Đã lưu phiên${tagText.isNotEmpty ? ' [#$tagText]' : ''}: $totalSamples mẫu (${(durationMs / 1000).toStringAsFixed(1)}s)',
             ),
             action: SnackBarAction(
               label: 'Xem lịch sử',
-              onPressed: () {
-                Navigator.of(context).push(
+              onPressed: () async {
+                await Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const RecordingHistoryScreen(),
                   ),
                 );
+                _loadSavedTags();
               },
             ),
           ),
@@ -281,6 +300,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     _countdownTimer?.cancel();
     _recordingTimer?.cancel();
     _subscription?.cancel();
+    _tagController.dispose();
     ForegroundServiceManager.instance.stopService();
     super.dispose();
   }
@@ -311,14 +331,20 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.laptop_chromebook),
+            tooltip: 'Xem trên máy tính (Wi-Fi)',
+            onPressed: () => WebShareSheet.show(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.history_rounded),
             tooltip: 'Lịch sử ghi',
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => const RecordingHistoryScreen(),
                 ),
               );
+              _loadSavedTags();
             },
           ),
         ],
@@ -973,6 +999,38 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
               ),
             ),
           ],
+          if (_tagController.text.trim().isNotEmpty) ...[
+            const SizedBox(height: 8.0),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10.0,
+                vertical: 4.0,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.red.shade100.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(12.0),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.label_outline,
+                    size: 13.0,
+                    color: Colors.red.shade800,
+                  ),
+                  const SizedBox(width: 4.0),
+                  Text(
+                    '#${_tagController.text.trim()}',
+                    style: TextStyle(
+                      fontSize: 12.0,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.red.shade900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12.0),
           SizedBox(
             width: double.infinity,
@@ -1052,6 +1110,156 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
             ],
           ),
           const SizedBox(height: 10.0),
+          // Trường nhập Tag / Vị trí đo
+          Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 10.0,
+              vertical: 2.0,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(12.0),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.label_outline,
+                  size: 18.0,
+                  color: Colors.indigo.shade600,
+                ),
+                const SizedBox(width: 8.0),
+                Expanded(
+                  child: TextField(
+                    controller: _tagController,
+                    decoration: InputDecoration(
+                      hintText: 'Tag / Vị trí đo (vd: Túi quần, Xe máy...)',
+                      hintStyle: TextStyle(
+                        fontSize: 12.5,
+                        color: Colors.grey.shade400,
+                      ),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8.0),
+                    ),
+                    style: const TextStyle(
+                      fontSize: 13.0,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                if (_tagController.text.isNotEmpty)
+                  GestureDetector(
+                    onTap: () {
+                      _tagController.clear();
+                      setState(() {});
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(4.0),
+                      child: Icon(
+                        Icons.close,
+                        size: 16.0,
+                        color: Colors.grey.shade500,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8.0),
+          // Gợi ý tag đã lưu trước đó của người dùng
+          if (_userSavedTags.isNotEmpty) ...[
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: _userSavedTags.map((tag) {
+                  final isSelected =
+                      _tagController.text.trim().toLowerCase() ==
+                      tag.toLowerCase();
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6.0),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14.0),
+                      onTap: () {
+                        if (isSelected) {
+                          _tagController.clear();
+                        } else {
+                          _tagController.text = tag;
+                        }
+                        setState(() {});
+                      },
+                      onLongPress: () async {
+                        final remove = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Xóa gợi ý tag?'),
+                            content: Text(
+                              'Bạn có muốn xóa tag "#$tag" khỏi danh sách gợi ý không?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(false),
+                                child: const Text('Hủy'),
+                              ),
+                              FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                ),
+                                onPressed: () => Navigator.of(ctx).pop(true),
+                                child: const Text('Xóa'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (remove == true) {
+                          await RecordingDatabase.instance.deleteUserTag(tag);
+                          _loadSavedTags();
+                          if (_tagController.text.trim().toLowerCase() ==
+                              tag.toLowerCase()) {
+                            _tagController.clear();
+                          }
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9.0,
+                          vertical: 4.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? Colors.indigo.shade50
+                              : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(14.0),
+                          border: Border.all(
+                            color: isSelected
+                                ? Colors.indigo.shade300
+                                : Colors.grey.shade200,
+                            width: 1.0,
+                          ),
+                        ),
+                        child: Text(
+                          '#$tag',
+                          style: TextStyle(
+                            fontSize: 11.0,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.w500,
+                            color: isSelected
+                                ? Colors.indigo.shade800
+                                : Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 10.0),
+          ] else ...[
+            const SizedBox(height: 2.0),
+          ],
           // Hàng cài đặt hẹn giờ
           Container(
             padding: const EdgeInsets.symmetric(
@@ -1214,12 +1422,13 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                         borderRadius: BorderRadius.circular(12.0),
                       ),
                     ),
-                    onPressed: () {
-                      Navigator.of(context).push(
+                    onPressed: () async {
+                      await Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const RecordingHistoryScreen(),
                         ),
                       );
+                      _loadSavedTags();
                     },
                     icon: const Icon(Icons.history, size: 18),
                     label: const Text(
