@@ -15,10 +15,12 @@ class LocalWebServer {
   HttpServer? _server;
   int _port = 8080;
   String? _localIp;
+  String? _lastError;
 
   bool get isRunning => _server != null;
   int get port => _port;
   String? get localIp => _localIp;
+  String? get lastError => _lastError;
   String? get serverUrl =>
       isRunning && _localIp != null ? 'http://$_localIp:$_port' : null;
 
@@ -30,7 +32,27 @@ class LocalWebServer {
         includeLinkLocal: false,
       );
 
-      // Ưu tiên wlan, en, eth...
+      // Sắp xếp ưu tiên interface Wi-Fi / LAN cục bộ
+      interfaces.sort((a, b) {
+        final aName = a.name.toLowerCase();
+        final bName = b.name.toLowerCase();
+        final aIsWifi =
+            aName.startsWith('wlan') ||
+            aName.startsWith('en') ||
+            aName.startsWith('eth') ||
+            aName.contains('wifi') ||
+            aName.startsWith('ap');
+        final bIsWifi =
+            bName.startsWith('wlan') ||
+            bName.startsWith('en') ||
+            bName.startsWith('eth') ||
+            bName.contains('wifi') ||
+            bName.startsWith('ap');
+        if (aIsWifi && !bIsWifi) return -1;
+        if (!aIsWifi && bIsWifi) return 1;
+        return 0;
+      });
+
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
           if (!addr.isLoopback && !addr.address.startsWith('127.')) {
@@ -40,6 +62,7 @@ class LocalWebServer {
       }
     } catch (e) {
       debugPrint('Error finding local IP: $e');
+      _lastError = 'Không tìm thấy IP: $e';
     }
     return null;
   }
@@ -49,10 +72,34 @@ class LocalWebServer {
     if (isRunning) return true;
 
     try {
+      _lastError = null;
       _port = port;
       _localIp = await getLocalIpAddress();
 
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, _port);
+      // Thử bind port với fallback nếu cổng 8080 bận
+      HttpServer? server;
+      int boundPort = port;
+      for (final p in [port, 8081, 8888, 8000]) {
+        try {
+          server = await HttpServer.bind(
+            InternetAddress.anyIPv4,
+            p,
+            shared: true,
+          );
+          boundPort = p;
+          break;
+        } catch (_) {}
+      }
+
+      server ??= await HttpServer.bind(
+        InternetAddress.anyIPv4,
+        0,
+        shared: true,
+      );
+      boundPort = server.port;
+
+      _server = server;
+      _port = boundPort;
       debugPrint('LocalWebServer running on port $_port, IP: $_localIp');
 
       _server!.listen(
@@ -65,6 +112,7 @@ class LocalWebServer {
       return true;
     } catch (e) {
       debugPrint('Error starting LocalWebServer: $e');
+      _lastError = e.toString();
       _server = null;
       return false;
     }
@@ -121,7 +169,8 @@ class LocalWebServer {
       // 3. API: Cập nhật nhãn / tag cho session (/api/sessions/<id>/label)
       final sessionLabelRegex = RegExp(r'^/api/sessions/(\d+)/label$');
       final labelMatch = sessionLabelRegex.firstMatch(path);
-      if (labelMatch != null && (request.method == 'POST' || request.method == 'PUT')) {
+      if (labelMatch != null &&
+          (request.method == 'POST' || request.method == 'PUT')) {
         final sessionId = int.parse(labelMatch.group(1)!);
         final content = await utf8.decoder.bind(request).join();
         String? newLabel;
@@ -133,9 +182,14 @@ class LocalWebServer {
             }
           } catch (_) {}
         }
-        await RecordingDatabase.instance.updateSessionLabel(sessionId, newLabel);
+        await RecordingDatabase.instance.updateSessionLabel(
+          sessionId,
+          newLabel,
+        );
         request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({'success': true, 'label': newLabel}));
+        request.response.write(
+          jsonEncode({'success': true, 'label': newLabel}),
+        );
         await request.response.close();
         return;
       }

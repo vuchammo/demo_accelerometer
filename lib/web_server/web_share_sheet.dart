@@ -267,8 +267,8 @@ class _WebShareSheetState extends State<WebShareSheet> {
                 ],
               ),
             ),
-          ] else ...[
-            // Khi máy chủ tắt
+          ] else if (_server.isRunning && _server.localIp == null) ...[
+            // Đã chạy nhưng chưa tìm thấy IP Wi-Fi
             Container(
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
@@ -280,11 +280,11 @@ class _WebShareSheetState extends State<WebShareSheet> {
                   const Icon(
                     Icons.wifi_off_outlined,
                     size: 48,
-                    color: Colors.white38,
+                    color: Colors.amber,
                   ),
                   const SizedBox(height: 12.0),
                   const Text(
-                    'Máy chủ web nội bộ đang tắt',
+                    'Chưa kết nối mạng Wi-Fi',
                     style: TextStyle(
                       fontSize: 15.0,
                       fontWeight: FontWeight.bold,
@@ -293,9 +293,71 @@ class _WebShareSheetState extends State<WebShareSheet> {
                   ),
                   const SizedBox(height: 6.0),
                   const Text(
-                    'Bật máy chủ để truyền phát dữ liệu đo trực tiếp sang trình duyệt máy tính mà không cần internet.',
+                    'Máy chủ đã sẵn sàng nhưng chưa nhận diện được địa chỉ IP Wi-Fi. Hãy kết nối điện thoại vào một mạng Wi-Fi rồi thử lại.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 12.5, color: Colors.white60),
+                  ),
+                  const SizedBox(height: 16.0),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF00E5FF),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20.0,
+                        vertical: 10.0,
+                      ),
+                    ),
+                    onPressed: _startServer,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text(
+                      'Thử tìm lại IP',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            // Khi máy chủ tắt hoặc lỗi
+            Container(
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(16.0),
+              ),
+              child: Column(
+                children: [
+                  Icon(
+                    _server.lastError != null
+                        ? Icons.error_outline
+                        : Icons.wifi_off_outlined,
+                    size: 48,
+                    color: _server.lastError != null
+                        ? Colors.redAccent
+                        : Colors.white38,
+                  ),
+                  const SizedBox(height: 12.0),
+                  Text(
+                    _server.lastError != null
+                        ? 'Không thể khởi động máy chủ'
+                        : 'Máy chủ web nội bộ đang tắt',
+                    style: const TextStyle(
+                      fontSize: 15.0,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 6.0),
+                  Text(
+                    _server.lastError ??
+                        'Bật máy chủ để truyền phát dữ liệu đo trực tiếp sang trình duyệt máy tính mà không cần internet.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: _server.lastError != null
+                          ? Colors.red.shade200
+                          : Colors.white60,
+                    ),
                   ),
                   const SizedBox(height: 16.0),
                   FilledButton.icon(
