@@ -4,40 +4,46 @@ import 'chart_data_point.dart';
 import 'motion_log_models.dart';
 
 // ---------------------------------------------------------------------------
-// Thuật toán mới: phát hiện di chuyển bằng CV (hệ số biến thiên) trên cửa sổ
-// trượt, kèm nội suy tuyến tính lên lưới đều và hysteresis.
+// Thuật toán phát hiện di chuyển / đứng yên — v2 (tương thích đa thiết bị)
 //
-// Ý tưởng: khi di chuyển, dao động DUY TRÌ liên tục và ổn định (std/mean nhỏ,
-// không có quãng lặng). Khi đứng yên nhưng điện thoại bị cầm/chạm, tín hiệu là
-// các cụm ngắn xen quãng lặng => hệ số biến thiên CV = std/mean lớn.
-// Không dùng độ lớn tuyệt đối của magnitude.
+// Đầu vào: magnitude gia tốc tổng hợp, thời gian tính bằng GIÂY (double).
+// Tần số lấy mẫu của máy có thể khác nhau (đã thử 10–12.5 Hz): dữ liệu được
+// nội suy về lưới đều [MotionConfig.sampleRateHz].
 //
-// Thời gian luôn tính bằng GIÂY (double). Nếu sensor trả về micro/mili-giây
-// thì đổi sang giây trước khi gọi [_CvEngine.add].
+// Ý tưởng: trong mỗi cửa sổ 4 s, làm mượt bằng trung bình trượt ~1 s để lấy
+// "đường bao năng lượng", rồi tính CV = std/mean của đường bao.
+//  - Di chuyển: hoạt động duy trì, ổn định  -> CV thấp.
+//  - Đứng yên : vài cụm ngắn xen quãng lặng -> CV cao.
+// CV là tỉ số nên không phụ thuộc thang biên độ; chỉ điều kiện
+// mean > meanMin (loại nhiễu nền) là phụ thuộc đơn vị.
 // ---------------------------------------------------------------------------
 
-/// Cấu hình tham số cho thuật toán phát hiện di chuyển.
+/// Cấu hình tham số cho thuật toán phát hiện di chuyển (v2).
 class MotionConfig {
   const MotionConfig({
     this.sampleRateHz = 12.5,
-    this.windowSeconds = 2.5,
-    this.hopSeconds = 0.5,
-    this.cvMax = 0.50,
-    this.meanMin = 0.60,
-    this.enterCount = 3,
-    this.exitCount = 4,
+    this.windowSamples = 50, // 4.0 s
+    this.hopSamples = 6, // ~0.48 s
+    this.envSamples = 12, // ~0.96 s, cửa sổ làm mượt đường bao
+    this.cvMax = 0.30,
+    this.meanMin = 0.30,
+    this.enterCount = 2,
+    this.exitCount = 3,
     this.sessionRatio = 0.5,
     this.skipSeconds = 1.5,
   });
 
-  /// Tần số nội suy đều (Hz).
+  /// Tần số lưới nội suy (Hz).
   final double sampleRateHz;
 
-  /// Độ dài cửa sổ và bước trượt (giây).
-  final double windowSeconds;
-  final double hopSeconds;
+  /// Kích thước cửa sổ / bước trượt / cửa sổ làm mượt, tính bằng số mẫu trên lưới.
+  final int windowSamples;
+  final int hopSamples;
+  final int envSamples;
 
-  /// Cửa sổ được bỏ phiếu "di chuyển" nếu cv < cvMax và mean > meanMin.
+  /// Cửa sổ bỏ phiếu "di chuyển" nếu cv < cvMax và mean > meanMin.
+  /// meanMin cùng đơn vị với magnitude (đang ở thang ~m/s²; nếu máy trả về đơn vị
+  /// khác, ví dụ g, hãy quy đổi trước hoặc đổi meanMin).
   final double cvMax;
   final double meanMin;
 
@@ -45,12 +51,13 @@ class MotionConfig {
   final int enterCount;
   final int exitCount;
 
-  /// Chỉ dùng cho [classifySession].
+  /// Chỉ dùng cho [MotionDetector.classifySession].
   final double sessionRatio;
   final double skipSeconds;
 
-  int get windowSamples => (windowSeconds * sampleRateHz).round();
-  int get hopSamples => (hopSeconds * sampleRateHz).round();
+  double get windowSeconds => windowSamples / sampleRateHz;
+  double get hopSeconds => hopSamples / sampleRateHz;
+  double get envSeconds => envSamples / sampleRateHz;
 }
 
 /// Kết quả của một cửa sổ trượt.
@@ -65,6 +72,8 @@ class MotionWindow {
 
   /// Thời điểm (giây) của mẫu cuối cửa sổ.
   final double endTime;
+
+  /// Trung bình và CV của đường bao trong cửa sổ.
   final double mean;
   final double cv;
 
@@ -82,35 +91,43 @@ class MotionWindow {
 
 /// Kết quả phân loại toàn bộ phiên ghi.
 class SessionResult {
-  const SessionResult({required this.isMoving, required this.ratio});
+  const SessionResult({
+    required this.isMoving,
+    required this.ratio,
+    this.totalWindows = 0,
+    this.movingVotes = 0,
+  });
 
   final bool isMoving;
 
   /// Tỉ lệ cửa sổ có phiếu "di chuyển" (0..1).
   final double ratio;
+
+  /// Tổng số cửa sổ trượt đã phân tích
+  final int totalWindows;
+
+  /// Số cửa sổ có phiếu "di chuyển"
+  final int movingVotes;
 }
 
 // ---------------------------------------------------------------------------
-// Engine nội bộ: xử lý nội suy, cửa sổ trượt, CV, hysteresis.
+// Engine nội bộ: xử lý nội suy, cửa sổ trượt, đường bao năng lượng, CV, hysteresis.
 // ---------------------------------------------------------------------------
 class _CvEngine {
-  _CvEngine({required this.config})
-      : _n = config.windowSamples,
-        _hop = config.hopSamples;
+  _CvEngine({required this.config});
 
   final MotionConfig config;
-  final int _n;
-  final int _hop;
 
   final List<double> _buf = <double>[];
-  double? _t0;
-  int _k = 0;
-  double _tp = 0;
+  double? _t0; // thời điểm mẫu đầu tiên (gốc của lưới nội suy)
+  int _k = 0; // chỉ số điểm lưới kế tiếp cần sinh
+  double _tp = 0; // mẫu thô trước đó
   double _mp = 0;
-  int _dropped = 0;
+  int _dropped = 0; // số điểm lưới đã trượt khỏi đầu buffer
   bool _moving = false;
   int _run = 0;
 
+  /// Trạng thái hiện tại (sau hysteresis).
   bool get isMoving => _moving;
 
   void reset() {
@@ -155,22 +172,34 @@ class _CvEngine {
   }
 
   void _drain(List<MotionWindow> out) {
-    while (_buf.length >= _n) {
-      var sum = 0.0;
-      for (var i = 0; i < _n; i++) {
-        sum += _buf[i];
+    final n = config.windowSamples;
+    final k = config.envSamples;
+    final ne = n - k + 1; // số điểm đường bao (kiểu "valid")
+    while (_buf.length >= n) {
+      // Đường bao: trung bình trượt k mẫu bên trong cửa sổ.
+      final env = List<double>.filled(ne, 0.0);
+      for (var j = 0; j < ne; j++) {
+        var a = 0.0;
+        for (var i = 0; i < k; i++) {
+          a += _buf[j + i];
+        }
+        env[j] = a / k;
       }
-      final mean = sum / _n;
+      var sum = 0.0;
+      for (final e in env) {
+        sum += e;
+      }
+      final mean = sum / ne;
       var sq = 0.0;
-      for (var i = 0; i < _n; i++) {
-        final d = _buf[i] - mean;
+      for (final e in env) {
+        final d = e - mean;
         sq += d * d;
       }
-      final std = sqrt(sq / _n);
+      final std = sqrt(sq / ne); // độ lệch chuẩn tổng thể (ddof = 0)
       final cv = std / (mean + 1e-9);
       final vote = cv < config.cvMax && mean > config.meanMin;
 
-      // Máy trạng thái có trễ (hysteresis).
+      // Máy trạng thái có trễ.
       if (!_moving) {
         _run = vote ? _run + 1 : 0;
         if (_run >= config.enterCount) {
@@ -185,7 +214,7 @@ class _CvEngine {
         }
       }
 
-      final endTime = _t0! + (_dropped + _n - 1) / config.sampleRateHz;
+      final endTime = _t0! + (_dropped + n - 1) / config.sampleRateHz;
       out.add(MotionWindow(
         endTime: endTime,
         mean: mean,
@@ -194,8 +223,8 @@ class _CvEngine {
         isMoving: _moving,
       ));
 
-      _buf.removeRange(0, _hop);
-      _dropped += _hop;
+      _buf.removeRange(0, config.hopSamples);
+      _dropped += config.hopSamples;
     }
   }
 }
@@ -256,6 +285,12 @@ class MotionDetector {
       return true;
     }());
     return inDebug;
+  }
+
+  /// Đưa một mẫu thô (thời gian tính bằng giây, magnitude) trực tiếp vào engine.
+  /// Trả về các cửa sổ mới hoàn thành (thường 0 hoặc 1).
+  List<MotionWindow> add(double tSeconds, double magnitude) {
+    return _engine.add(tSeconds, magnitude);
   }
 
   /// Đưa một mẫu cảm biến vào. Trả về true nếu trạng thái MOVING/STILL thay đổi.
@@ -475,7 +510,12 @@ class MotionDetector {
     MotionConfig config = const MotionConfig(),
   }) {
     if (tSeconds.isEmpty || tSeconds.length != magnitude.length) {
-      return const SessionResult(isMoving: false, ratio: 0);
+      return const SessionResult(
+        isMoving: false,
+        ratio: 0,
+        totalWindows: 0,
+        movingVotes: 0,
+      );
     }
     final start = tSeconds.first + config.skipSeconds;
     final engine = _CvEngine(config: config);
@@ -489,6 +529,11 @@ class MotionDetector {
       }
     }
     final ratio = total == 0 ? 0.0 : votes / total;
-    return SessionResult(isMoving: ratio >= config.sessionRatio, ratio: ratio);
+    return SessionResult(
+      isMoving: ratio >= config.sessionRatio,
+      ratio: ratio,
+      totalWindows: total,
+      movingVotes: votes,
+    );
   }
 }

@@ -22,9 +22,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
   bool _isRuleExpanded = false;
 
-  // Config thuật toán mới (CV-based)
-  double _cvMax = 0.50;
-  double _meanMin = 0.60;
+  // Config thuật toán mới (CV-based v2)
+  double _cvMax = 0.30;
+  double _meanMin = 0.30;
   double _sessionRatio = 0.50;
 
   List<RecordingSession> _cachedSessions = [];
@@ -157,19 +157,19 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Thuật toán CV-based đánh giá phiên ghi bằng cách phân tích cửa sổ trượt:',
+              'Thuật toán CV-based (v2) đánh giá phiên ghi bằng cách phân tích đường bao năng lượng trên cửa sổ trượt:',
               style: TextStyle(fontSize: 13.5, height: 1.4),
             ),
             const SizedBox(height: 12.0),
             _ruleBullet(
-              '1. Hệ số biến thiên (CV)',
-              '< ${_cvMax.toStringAsFixed(2)} (dao động đều = di chuyển)',
+              '1. Hệ số biến thiên đường bao (CV)',
+              '< ${_cvMax.toStringAsFixed(2)} (dao động duy trì = di chuyển)',
               Colors.teal.shade700,
             ),
             const SizedBox(height: 8.0),
             _ruleBullet(
               '2. Trung bình magnitude (Mean)',
-              '> ${_meanMin.toStringAsFixed(2)} m/s²',
+              '> ${_meanMin.toStringAsFixed(2)} m/s² (loại nhiễu nền)',
               Colors.indigo.shade700,
             ),
             const SizedBox(height: 8.0),
@@ -187,7 +187,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 border: Border.all(color: Colors.amber.shade200),
               ),
               child: Text(
-                'Cửa sổ 2.5s, trượt 0.5s. Hysteresis: 3 cửa sổ liên tiếp để vào MOVING, 4 để thoát về STILL. Độ trễ ~2–5 giây.',
+                'Cửa sổ 4.0s (50 mẫu), trượt ~0.48s (6 mẫu), đường bao mượt ~0.96s (12 mẫu). Hysteresis: 2 cửa sổ liên tiếp để vào MOVING, 3 để thoát về STILL. Tối ưu đa thiết bị.',
                 style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
               ),
             ),
@@ -557,7 +557,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
   /// Khung hiển thị thông minh mô tả điều kiện di chuyển (Interactive Condition Card)
   Widget _buildRuleSummaryBanner(EvaluationReport report) {
     final isCustomConfig =
-        _cvMax != 0.50 || _meanMin != 0.60 || _sessionRatio != 0.50;
+        _cvMax != 0.30 || _meanMin != 0.30 || _sessionRatio != 0.50;
 
     return Container(
       decoration: BoxDecoration(
@@ -1019,23 +1019,33 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ),
                   ),
                   const SizedBox(height: 8.0),
-                  _buildConfigInfoRow('Cửa sổ', '2.5s', Colors.teal.shade600),
-                  const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
-                    'Bước trượt',
-                    '0.5s',
+                    'Cửa sổ',
+                    '4.0s (50 mẫu)',
                     Colors.teal.shade600,
                   ),
                   const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
+                    'Bước trượt',
+                    '~0.48s (6 mẫu)',
+                    Colors.teal.shade600,
+                  ),
+                  const SizedBox(height: 6.0),
+                  _buildConfigInfoRow(
+                    'Đường bao mượt',
+                    '~0.96s (12 mẫu)',
+                    Colors.purple.shade600,
+                  ),
+                  const SizedBox(height: 6.0),
+                  _buildConfigInfoRow(
                     'Hysteresis vào',
-                    '3 cửa sổ liên tiếp',
+                    '2 cửa sổ liên tiếp',
                     Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
                     'Hysteresis ra',
-                    '4 cửa sổ liên tiếp',
+                    '3 cửa sổ liên tiếp',
                     Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 6.0),
@@ -1132,8 +1142,8 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           final previewReport = AlgorithmEvaluationService.instance
               .generateReport(previewResults);
           final isModified =
-              tempCvMax != 0.50 ||
-              tempMeanMin != 0.60 ||
+              tempCvMax != 0.30 ||
+              tempMeanMin != 0.30 ||
               tempSessionRatio != 0.50;
 
           return Container(
@@ -1203,8 +1213,8 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                         TextButton(
                           onPressed: () {
                             setSheetState(() {
-                              tempCvMax = 0.50;
-                              tempMeanMin = 0.60;
+                              tempCvMax = 0.30;
+                              tempMeanMin = 0.30;
                               tempSessionRatio = 0.50;
                             });
                           },
@@ -1342,9 +1352,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   ),
                   Slider(
                     value: tempCvMax,
-                    min: 0.10,
-                    max: 1.00,
-                    divisions: 18,
+                    min: 0.05,
+                    max: 0.80,
+                    divisions: 15,
                     activeColor: const Color(0xFF0F766E),
                     inactiveColor: Colors.teal.shade100,
                     onChanged: (val) {
@@ -1400,9 +1410,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   ),
                   Slider(
                     value: tempMeanMin,
-                    min: 0.10,
-                    max: 2.00,
-                    divisions: 19,
+                    min: 0.05,
+                    max: 1.50,
+                    divisions: 29,
                     activeColor: const Color(0xFF4338CA),
                     inactiveColor: Colors.indigo.shade100,
                     onChanged: (val) {

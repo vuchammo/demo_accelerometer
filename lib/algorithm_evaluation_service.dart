@@ -236,21 +236,6 @@ class AlgorithmEvaluationService {
       config: config,
     );
 
-    // Ước lượng số cửa sổ (để hiển thị chi tiết hơn)
-    int movingVotes = 0;
-    int totalWindows = 0;
-    if (tSeconds.isNotEmpty) {
-      final duration = tSeconds.last - tSeconds.first;
-      final effectiveDuration = duration - config.skipSeconds;
-      if (effectiveDuration > config.windowSeconds) {
-        totalWindows =
-            ((effectiveDuration - config.windowSeconds) / config.hopSeconds)
-                .floor() +
-            1;
-        movingVotes = (result.ratio * totalWindows).round();
-      }
-    }
-
     final bool? groundTruth =
         manualGroundTruth ?? determineGroundTruth(session.label);
     final String source = manualGroundTruth != null
@@ -262,8 +247,8 @@ class AlgorithmEvaluationService {
       totalSamples: total,
       predictedIsMoving: result.isMoving,
       voteRatio: result.ratio,
-      totalWindows: totalWindows,
-      movingVotes: movingVotes,
+      totalWindows: result.totalWindows,
+      movingVotes: result.movingVotes,
       groundTruthIsMoving: groundTruth,
       groundTruthSource: source,
       config: config,
@@ -284,19 +269,6 @@ class AlgorithmEvaluationService {
       config: config,
     );
 
-    final duration =
-        tSeconds.isNotEmpty ? tSeconds.last - tSeconds.first : 0.0;
-    final effectiveDuration = duration - config.skipSeconds;
-    int totalWindows = 0;
-    int movingVotes = 0;
-    if (effectiveDuration > config.windowSeconds) {
-      totalWindows =
-          ((effectiveDuration - config.windowSeconds) / config.hopSeconds)
-              .floor() +
-          1;
-      movingVotes = (result.ratio * totalWindows).round();
-    }
-
     final bool? groundTruth =
         manualGroundTruth ?? determineGroundTruth(session.label);
     final String source = manualGroundTruth != null
@@ -308,8 +280,8 @@ class AlgorithmEvaluationService {
       totalSamples: tSeconds.length,
       predictedIsMoving: result.isMoving,
       voteRatio: result.ratio,
-      totalWindows: totalWindows,
-      movingVotes: movingVotes,
+      totalWindows: result.totalWindows,
+      movingVotes: result.movingVotes,
       groundTruthIsMoving: groundTruth,
       groundTruthSource: source,
       config: config,
