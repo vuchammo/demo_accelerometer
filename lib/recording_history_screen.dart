@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'algorithm_evaluation_screen.dart';
 import 'database/recording_database.dart';
 import 'database/recording_session.dart';
 import 'recording_detail_screen.dart';
@@ -198,6 +199,15 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
     }
   }
 
+  Future<void> _openAlgorithmEvaluation() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const AlgorithmEvaluationScreen(),
+      ),
+    );
+    _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -208,6 +218,11 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
           style: TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.analytics_outlined),
+            tooltip: 'Đánh giá thuật toán',
+            onPressed: _openAlgorithmEvaluation,
+          ),
           IconButton(
             icon: const Icon(Icons.laptop_chromebook),
             tooltip: 'Xem trên máy tính (Wi-Fi)',
@@ -316,6 +331,9 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
 
             return Column(
               children: [
+                // Banner đánh giá độ chính xác thuật toán
+                _buildEvaluationBanner(allSessions),
+
                 // Khung tìm kiếm theo tag hoặc ngày giờ
                 _buildSearchBar(),
 
@@ -392,6 +410,116 @@ class _RecordingHistoryScreenState extends State<RecordingHistoryScreen> {
               ],
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEvaluationBanner(List<RecordingSession> allSessions) {
+    final taggedCount = allSessions
+        .where((s) => s.label != null && s.label!.trim().isNotEmpty)
+        .length;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16.0, 10.0, 16.0, 2.0),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF1E2235),
+            const Color(0xFF2E3856),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 10.0,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16.0),
+          onTap: _openAlgorithmEvaluation,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14.0,
+              vertical: 12.0,
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(9.0),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12.0),
+                  ),
+                  child: const Icon(
+                    Icons.fact_check_outlined,
+                    color: Color(0xFF00E5FF),
+                    size: 22.0,
+                  ),
+                ),
+                const SizedBox(width: 12.0),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Đánh giá độ chính xác thuật toán',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Kiểm thử $taggedCount/${allSessions.length} phiên có nhãn theo tiêu chí di chuyển',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: Colors.white.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10.0,
+                    vertical: 5.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00E5FF),
+                    borderRadius: BorderRadius.circular(12.0),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Kiểm tra',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      SizedBox(width: 2.0),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        size: 15.0,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

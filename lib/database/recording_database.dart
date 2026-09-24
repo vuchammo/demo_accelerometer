@@ -210,4 +210,32 @@ class RecordingDatabase {
     ''');
     await db.delete('user_tags', where: 'tag = ?', whereArgs: [tag.trim()]);
   }
+
+  /// Lấy dữ liệu phân phối mẫu gia tốc cho tất cả phiên ghi để phục vụ đánh giá thuật toán
+  Future<Map<int, Map<String, int>>> getSessionsMagnitudeDistribution() async {
+    final db = await database;
+    final results = await db.rawQuery('''
+      SELECT 
+        session_id,
+        COUNT(*) as total_samples,
+        SUM(CASE WHEN magnitude >= 1.0 AND magnitude < 4.0 THEN 1 ELSE 0 END) as moderate_count,
+        SUM(CASE WHEN magnitude >= 4.0 AND magnitude <= 8.0 THEN 1 ELSE 0 END) as high_count,
+        SUM(CASE WHEN magnitude > 8.0 THEN 1 ELSE 0 END) as peak_count
+      FROM recording_data_points
+      GROUP BY session_id
+    ''');
+
+    final map = <int, Map<String, int>>{};
+    for (final row in results) {
+      final sessionId = row['session_id'] as int;
+      map[sessionId] = {
+        'total_samples': (row['total_samples'] as num?)?.toInt() ?? 0,
+        'moderate_count': (row['moderate_count'] as num?)?.toInt() ?? 0,
+        'high_count': (row['high_count'] as num?)?.toInt() ?? 0,
+        'peak_count': (row['peak_count'] as num?)?.toInt() ?? 0,
+      };
+    }
+    return map;
+  }
 }
+
