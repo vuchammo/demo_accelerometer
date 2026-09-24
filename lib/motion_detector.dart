@@ -7,7 +7,7 @@ class MotionDetector {
   final double thresholdMin = 1.0;
   final double thresholdMax = 8.0;
   static const int windowSize = 30;
-  static const int requiredPoints = 28;
+  static const int requiredPoints = 30;
 
   MotionLogLevel logLevel = MotionLogLevel.verbose;
 
@@ -164,9 +164,11 @@ class MotionDetector {
       isMoving: _isMoving,
     );
 
-    // Lưu data point cho biểu đồ (rolling window)
+    // Lưu data point cho biểu đồ real-time (giữ đủ thời gian ~8.0s để phóng to hoặc cuộn mượt)
     _chartDataPoints.add(dataPoint);
-    if (_chartDataPoints.length > windowSize) {
+    while (_chartDataPoints.length > 150 ||
+        (_chartDataPoints.isNotEmpty &&
+            _chartDataPoints.first.relativeTime < relativeTime - 8.0)) {
       _chartDataPoints.removeAt(0);
     }
 

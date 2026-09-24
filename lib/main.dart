@@ -41,7 +41,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   DateTime _stateChangedTime = DateTime.now();
   Timer? _clockTimer;
   bool _showChart = false;
-  bool _showMagnitudeList = true;
+  bool _showMagnitudeList = false;
 
   // Cài đặt hẹn giờ
   int _startDelaySeconds = 10; // 0 = ngay lập tức; 5, 10, 15, 30...
