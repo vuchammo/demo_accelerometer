@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'chart_data_point.dart';
 import 'motion_log_models.dart';
 
 class MotionDetector {
@@ -19,6 +20,10 @@ class MotionDetector {
 
   final List<double> _magnitudeWindow = [];
   List<double> get magnitudeWindow => List.unmodifiable(_magnitudeWindow);
+
+  final List<ChartDataPoint> _chartDataPoints = [];
+  List<ChartDataPoint> get chartDataPoints =>
+      List.unmodifiable(_chartDataPoints);
 
   bool _isMoving = false;
   bool get isMoving => _isMoving;
@@ -138,6 +143,17 @@ class MotionDetector {
       requiredPoints: requiredPoints,
     );
 
+    // Lưu data point cho biểu đồ
+    _chartDataPoints.add(ChartDataPoint(
+      magnitude: magnitude,
+      timestamp: time,
+      category: category,
+      isMoving: _isMoving,
+    ));
+    if (_chartDataPoints.length > windowSize) {
+      _chartDataPoints.removeAt(0);
+    }
+
     _emitLog(entry);
 
     return stateChanged;
@@ -205,6 +221,7 @@ class MotionDetector {
     _isMoving = false;
     _recentMagnitudes.clear();
     _magnitudeWindow.clear();
+    _chartDataPoints.clear();
     _samplesSinceLastSummary = 0;
     _lastSummaryTime = null;
   }
