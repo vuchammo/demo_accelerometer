@@ -43,6 +43,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
   Timer? _clockTimer;
   bool _showChart = false;
   bool _showMagnitudeList = false;
+  bool _isDetectionEnabled = true;
 
   // Cài đặt hẹn giờ
   int _startDelaySeconds = 10; // 0 = ngay lập tức; 5, 10, 15, 30...
@@ -100,7 +101,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                   event.timestamp,
                 );
 
-                if (stateChanged) {
+                if (_isDetectionEnabled && stateChanged) {
                   _stateChangedTime = now;
                   NotificationService.instance.showMovementNotification(
                     isMoving: _detector.isMoving,
@@ -156,6 +157,28 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
       const SnackBar(
         content: Text('Đã bắt đầu lắng nghe cảm biến gia tốc'),
         duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _toggleMotionDetection(bool value) {
+    setState(() {
+      _isDetectionEnabled = value;
+      _detector.isDetectionEnabled = value;
+      if (value) {
+        _stateChangedTime = DateTime.now();
+      }
+    });
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          value
+              ? 'Đã bật phát hiện di chuyển / không di chuyển'
+              : 'Đã tắt phát hiện di chuyển / không di chuyển',
+        ),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -366,13 +389,21 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     final isMoving = _detector.isMoving;
     final currentDuration = DateTime.now().difference(_stateChangedTime);
 
-    final backgroundColor = !isListening
-        ? const Color(0xFF475569)
-        : (isMoving ? Colors.green.shade600 : Colors.red.shade600);
+    final Color backgroundColor;
+    final Color shadowColor;
 
-    final shadowColor = !isListening
-        ? Colors.blueGrey.withValues(alpha: 0.35)
-        : (isMoving ? Colors.green : Colors.red).withValues(alpha: 0.35);
+    if (!isListening) {
+      backgroundColor = const Color(0xFF475569);
+      shadowColor = Colors.blueGrey.withValues(alpha: 0.35);
+    } else if (!_isDetectionEnabled) {
+      backgroundColor = const Color(0xFF334155);
+      shadowColor = const Color(0xFF334155).withValues(alpha: 0.35);
+    } else {
+      backgroundColor = isMoving ? Colors.green.shade600 : Colors.red.shade600;
+      shadowColor = (isMoving ? Colors.green : Colors.red).withValues(
+        alpha: 0.35,
+      );
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F8FA),
@@ -384,9 +415,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
         actions: [
           IconButton(
             icon: Icon(
-              isListening
-                  ? Icons.sensors_rounded
-                  : Icons.sensors_off_rounded,
+              isListening ? Icons.sensors_rounded : Icons.sensors_off_rounded,
               color: isListening
                   ? const Color(0xFF0F766E)
                   : Colors.grey.shade400,
@@ -483,6 +512,48 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                                 letterSpacing: 2.0,
                               ),
                             ),
+                          ] else if (!_isDetectionEnabled) ...[
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.motion_photos_off_rounded,
+                                  color: Colors.indigo.shade200,
+                                  size: 24.0,
+                                ),
+                                const SizedBox(width: 8.0),
+                                const Text(
+                                  'Phát hiện di chuyển: Tắt',
+                                  style: TextStyle(
+                                    fontSize: 20.0,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    letterSpacing: 0.5,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8.0),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14.0,
+                                vertical: 4.0,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(20.0),
+                              ),
+                              child: Text(
+                                'Gia tốc đo được: ${_detector.recentMagnitudes.isNotEmpty ? _detector.recentMagnitudes.first.toStringAsFixed(2) : '--'} m/s²',
+                                style: const TextStyle(
+                                  fontSize: 15.0,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
                           ] else ...[
                             Text(
                               isMoving ? 'Có chuyển động' : 'Không chuyển động',
@@ -512,6 +583,9 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                     const SizedBox(height: 14.0),
                     // Thẻ điều khiển Lắng nghe cảm biến gia tốc
                     _buildSensorListeningControlCard(),
+                    const SizedBox(height: 14.0),
+                    // Thẻ bật/tắt phát hiện di chuyển
+                    _buildDetectionToggleCard(),
                     const SizedBox(height: 14.0),
                     // Khu vực điều khiển ghi dữ liệu
                     _buildRecordingControlCard(),
@@ -915,8 +989,9 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
               color: isListening ? Colors.teal.shade50 : Colors.amber.shade50,
               shape: BoxShape.circle,
               border: Border.all(
-                color:
-                    isListening ? Colors.teal.shade300 : Colors.amber.shade400,
+                color: isListening
+                    ? Colors.teal.shade300
+                    : Colors.amber.shade400,
                 width: 1.2,
               ),
             ),
@@ -982,10 +1057,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                   isListening
                       ? 'Đang nhận dữ liệu (10Hz)'
                       : 'Đã tạm dừng nhận tín hiệu',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: Colors.grey.shade600,
-                  ),
+                  style: TextStyle(fontSize: 11.5, color: Colors.grey.shade600),
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -1033,6 +1105,126 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                     ),
                     onPressed: _startListeningFromUI,
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Thẻ bật/tắt thuật toán phát hiện di chuyển / không di chuyển
+  Widget _buildDetectionToggleCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border.all(
+          color: _isDetectionEnabled
+              ? Colors.indigo.shade200
+              : Colors.grey.shade200,
+          width: 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8.0,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38.0,
+            height: 38.0,
+            decoration: BoxDecoration(
+              color: _isDetectionEnabled
+                  ? Colors.indigo.shade50
+                  : Colors.grey.shade100,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: _isDetectionEnabled
+                    ? Colors.indigo.shade200
+                    : Colors.grey.shade300,
+              ),
+            ),
+            child: Icon(
+              _isDetectionEnabled
+                  ? Icons.directions_walk_rounded
+                  : Icons.motion_photos_off_rounded,
+              color: _isDetectionEnabled
+                  ? Colors.indigo.shade700
+                  : Colors.grey.shade500,
+              size: 20.0,
+            ),
+          ),
+          const SizedBox(width: 12.0),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        'Phát hiện di chuyển',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.bold,
+                          color: _isDetectionEnabled
+                              ? Colors.grey.shade900
+                              : Colors.grey.shade600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6.0),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6.0,
+                        vertical: 1.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isDetectionEnabled
+                            ? Colors.indigo.shade50
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(6.0),
+                        border: Border.all(
+                          color: _isDetectionEnabled
+                              ? Colors.indigo.shade200
+                              : Colors.grey.shade300,
+                        ),
+                      ),
+                      child: Text(
+                        _isDetectionEnabled ? 'Đang bật' : 'Đã tắt',
+                        style: TextStyle(
+                          fontSize: 10.0,
+                          fontWeight: FontWeight.bold,
+                          color: _isDetectionEnabled
+                              ? Colors.indigo.shade800
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2.0),
+                Text(
+                  _isDetectionEnabled
+                      ? 'Phân tích di chuyển / đứng yên & thông báo'
+                      : 'Đã tạm dừng phán đoán trạng thái di chuyển',
+                  style: TextStyle(fontSize: 11.5, color: Colors.grey.shade500),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: _isDetectionEnabled,
+            activeThumbColor: Colors.indigo.shade600,
+            onChanged: _toggleMotionDetection,
           ),
         ],
       ),

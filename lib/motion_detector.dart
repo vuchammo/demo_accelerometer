@@ -37,6 +37,9 @@ class MotionDetector {
   bool _isMoving = false;
   bool get isMoving => _isMoving;
 
+  /// Bật / Tắt thuật toán phán đoán trạng thái di chuyển / không di chuyển
+  bool isDetectionEnabled = true;
+
   int _motionPointsCount = 0;
   int get motionPointsCount => _motionPointsCount;
   int get consecutiveHighCount => _motionPointsCount;
@@ -108,20 +111,22 @@ class MotionDetector {
     _motionPointsCount = motionCount;
     _stillPointsCount = stillCount;
 
-    if (!_isMoving) {
-      if (motionCount >= requiredPoints) {
-        _isMoving = true;
-        stateChanged = true;
-        triggerReason =
-            'Đạt $motionCount/$windowSize điểm chuyển động (yêu cầu >= $requiredPoints)';
-      }
-    } else {
-      if (_magnitudeWindow.length >= requiredPoints &&
-          stillCount >= requiredPoints) {
-        _isMoving = false;
-        stateChanged = true;
-        triggerReason =
-            'Đạt $stillCount/$windowSize điểm đứng yên (yêu cầu >= $requiredPoints)';
+    if (isDetectionEnabled) {
+      if (!_isMoving) {
+        if (motionCount >= requiredPoints) {
+          _isMoving = true;
+          stateChanged = true;
+          triggerReason =
+              'Đạt $motionCount/$windowSize điểm chuyển động (yêu cầu >= $requiredPoints)';
+        }
+      } else {
+        if (_magnitudeWindow.length >= requiredPoints &&
+            stillCount >= requiredPoints) {
+          _isMoving = false;
+          stateChanged = true;
+          triggerReason =
+              'Đạt $stillCount/$windowSize điểm đứng yên (yêu cầu >= $requiredPoints)';
+        }
       }
     }
 
