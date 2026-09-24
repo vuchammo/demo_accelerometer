@@ -1,34 +1,23 @@
 import 'chart_data_point.dart';
 import 'database/recording_session.dart';
+import 'motion_detector.dart';
 
-/// Kết quả phân tích & đánh giá cho một phiên ghi
+/// Kết quả phân tích & đánh giá cho một phiên ghi (thuật toán CV-based)
 class SessionEvaluationResult {
   final RecordingSession session;
   final int totalSamples;
-  final int moderateCount;
-  final int highCount;
-  final int peakCount;
-
-  /// % Gia tốc mức vừa (1.0 <= mag < 4.0)
-  final double moderatePercentage;
-
-  /// % Gia tốc cao (4.0 <= mag <= 8.0)
-  final double highPercentage;
-
-  /// % Gia tốc cực đại (mag > 8.0)
-  final double peakPercentage;
-
-  /// % Gia tốc cao + cực đại (mag >= 4.0)
-  final double highAndPeakPercentage;
 
   /// Dự đoán của thuật toán: true = Có di chuyển, false = Không di chuyển
   final bool predictedIsMoving;
 
-  /// Ngưỡng mức vừa được sử dụng (%)
-  final double moderateThresholdPct;
+  /// Tỉ lệ cửa sổ có phiếu "di chuyển" (0..1)
+  final double voteRatio;
 
-  /// Ngưỡng cao + cực đại được sử dụng (%)
-  final double highAndPeakThresholdPct;
+  /// Tổng số cửa sổ trượt đã đánh giá
+  final int totalWindows;
+
+  /// Số cửa sổ có phiếu di chuyển
+  final int movingVotes;
 
   /// Nhãn thực tế (Ground truth): true = Có di chuyển, false = Không di chuyển, null = Chưa xác định
   final bool? groundTruthIsMoving;
@@ -36,21 +25,19 @@ class SessionEvaluationResult {
   /// Nguồn gốc gán nhãn thực tế ('auto_keyword', 'manual', 'unclassified')
   final String groundTruthSource;
 
+  /// Config đã dùng
+  final MotionConfig config;
+
   const SessionEvaluationResult({
     required this.session,
     required this.totalSamples,
-    required this.moderateCount,
-    required this.highCount,
-    required this.peakCount,
-    required this.moderatePercentage,
-    required this.highPercentage,
-    required this.peakPercentage,
-    required this.highAndPeakPercentage,
     required this.predictedIsMoving,
-    this.moderateThresholdPct = 30.0,
-    this.highAndPeakThresholdPct = 5.0,
+    required this.voteRatio,
+    required this.totalWindows,
+    required this.movingVotes,
     required this.groundTruthIsMoving,
     this.groundTruthSource = 'auto_keyword',
+    this.config = const MotionConfig(),
   });
 
   /// Thuật toán có đoán đúng hay không (null nếu không có Ground Truth)
@@ -62,25 +49,9 @@ class SessionEvaluationResult {
   /// Thông báo giải thích chi tiết lý do dự đoán
   String get explanation {
     if (predictedIsMoving) {
-      return 'Thỏa mãn: Mức vừa ${moderatePercentage.toStringAsFixed(1)}% (> ${moderateThresholdPct.toStringAsFixed(0)}%) và Cao+Cực đại ${highAndPeakPercentage.toStringAsFixed(1)}% (< ${highAndPeakThresholdPct.toStringAsFixed(0)}%)';
+      return 'Tỉ lệ cửa sổ di chuyển: ${(voteRatio * 100).toStringAsFixed(1)}% (≥ ${(config.sessionRatio * 100).toStringAsFixed(0)}%) → CÓ DI CHUYỂN';
     }
-
-    final List<String> reasons = [];
-    if (moderatePercentage <= moderateThresholdPct) {
-      reasons.add(
-        'Mức vừa chỉ đạt ${moderatePercentage.toStringAsFixed(1)}% (yêu cầu > ${moderateThresholdPct.toStringAsFixed(0)}%)',
-      );
-    }
-    if (highAndPeakPercentage >= highAndPeakThresholdPct) {
-      reasons.add(
-        'Cao+Cực đại lên tới ${highAndPeakPercentage.toStringAsFixed(1)}% (yêu cầu < ${highAndPeakThresholdPct.toStringAsFixed(0)}%)',
-      );
-    }
-
-    if (reasons.isEmpty) {
-      return 'Không thỏa mãn điều kiện di chuyển';
-    }
-    return reasons.join(' & ');
+    return 'Tỉ lệ cửa sổ di chuyển: ${(voteRatio * 100).toStringAsFixed(1)}% (< ${(config.sessionRatio * 100).toStringAsFixed(0)}%) → KHÔNG DI CHUYỂN';
   }
 
   /// Tạo bản sao với Ground Truth được chỉnh sửa thủ công
@@ -88,18 +59,13 @@ class SessionEvaluationResult {
     return SessionEvaluationResult(
       session: session,
       totalSamples: totalSamples,
-      moderateCount: moderateCount,
-      highCount: highCount,
-      peakCount: peakCount,
-      moderatePercentage: moderatePercentage,
-      highPercentage: highPercentage,
-      peakPercentage: peakPercentage,
-      highAndPeakPercentage: highAndPeakPercentage,
       predictedIsMoving: predictedIsMoving,
-      moderateThresholdPct: moderateThresholdPct,
-      highAndPeakThresholdPct: highAndPeakThresholdPct,
+      voteRatio: voteRatio,
+      totalWindows: totalWindows,
+      movingVotes: movingVotes,
       groundTruthIsMoving: newGroundTruth,
       groundTruthSource: 'manual',
+      config: config,
     );
   }
 }
@@ -153,22 +119,11 @@ class EvaluationReport {
       .length;
 }
 
-/// Dịch vụ tính toán & đánh giá thuật toán phát hiện di chuyển
+/// Dịch vụ tính toán & đánh giá thuật toán phát hiện di chuyển (CV-based)
 class AlgorithmEvaluationService {
   AlgorithmEvaluationService._();
   static final AlgorithmEvaluationService instance =
       AlgorithmEvaluationService._();
-
-  /// Ngưỡng gia tốc mức vừa tối thiểu (> 30%)
-  static const double moderateThresholdPct = 30.0;
-
-  /// Ngưỡng gia tốc cao + cực đại tối đa (< 5%)
-  static const double highAndPeakThresholdPct = 5.0;
-
-  /// Ngưỡng gia tốc magnitude (m/s²)
-  static const double minModerateMag = 1.0;
-  static const double maxModerateMag = 4.0;
-  static const double maxHighMag = 8.0;
 
   /// Loại bỏ dấu tiếng Việt để so khớp từ khóa linh hoạt
   static String removeDiacritics(String str) {
@@ -258,103 +213,43 @@ class AlgorithmEvaluationService {
   }
 
   /// Đánh giá một phiên ghi dựa trên các điểm dữ liệu `ChartDataPoint`
+  /// sử dụng thuật toán CV-based (classifySession)
   SessionEvaluationResult evaluateSessionPoints({
     required RecordingSession session,
     required List<ChartDataPoint> points,
     bool? manualGroundTruth,
-    double? customModerateThreshold,
-    double? customHighAndPeakThreshold,
+    MotionConfig config = const MotionConfig(),
   }) {
-    int moderateCount = 0;
-    int highCount = 0;
-    int peakCount = 0;
     final total = points.length;
 
+    // Chuyển ChartDataPoint thành danh sách tSeconds & magnitude
+    final List<double> tSeconds = [];
+    final List<double> magnitudes = [];
     for (final p in points) {
-      final mag = p.magnitude;
-      if (mag >= minModerateMag && mag < maxModerateMag) {
-        moderateCount++;
-      } else if (mag >= maxModerateMag && mag <= maxHighMag) {
-        highCount++;
-      } else if (mag > maxHighMag) {
-        peakCount++;
+      tSeconds.add(p.relativeTime);
+      magnitudes.add(p.magnitude);
+    }
+
+    final result = MotionDetector.classifySession(
+      tSeconds,
+      magnitudes,
+      config: config,
+    );
+
+    // Ước lượng số cửa sổ (để hiển thị chi tiết hơn)
+    int movingVotes = 0;
+    int totalWindows = 0;
+    if (tSeconds.isNotEmpty) {
+      final duration = tSeconds.last - tSeconds.first;
+      final effectiveDuration = duration - config.skipSeconds;
+      if (effectiveDuration > config.windowSeconds) {
+        totalWindows =
+            ((effectiveDuration - config.windowSeconds) / config.hopSeconds)
+                .floor() +
+            1;
+        movingVotes = (result.ratio * totalWindows).round();
       }
     }
-
-    return _buildEvaluationResult(
-      session: session,
-      totalSamples: total,
-      moderateCount: moderateCount,
-      highCount: highCount,
-      peakCount: peakCount,
-      manualGroundTruth: manualGroundTruth,
-      customModerateThreshold: customModerateThreshold,
-      customHighAndPeakThreshold: customHighAndPeakThreshold,
-    );
-  }
-
-  /// Đánh giá một phiên ghi dựa trên các số lượng mẫu đã đếm sẵn
-  SessionEvaluationResult evaluateCountData({
-    required RecordingSession session,
-    required int totalSamples,
-    required int moderateCount,
-    required int highCount,
-    required int peakCount,
-    bool? manualGroundTruth,
-    double? customModerateThreshold,
-    double? customHighAndPeakThreshold,
-  }) {
-    return _buildEvaluationResult(
-      session: session,
-      totalSamples: totalSamples,
-      moderateCount: moderateCount,
-      highCount: highCount,
-      peakCount: peakCount,
-      manualGroundTruth: manualGroundTruth,
-      customModerateThreshold: customModerateThreshold,
-      customHighAndPeakThreshold: customHighAndPeakThreshold,
-    );
-  }
-
-  /// Hàm xây dựng kết quả đánh giá theo thuật toán quy định
-  SessionEvaluationResult _buildEvaluationResult({
-    required RecordingSession session,
-    required int totalSamples,
-    required int moderateCount,
-    required int highCount,
-    required int peakCount,
-    bool? manualGroundTruth,
-    double? customModerateThreshold,
-    double? customHighAndPeakThreshold,
-  }) {
-    final double moderatePct;
-    final double highPct;
-    final double peakPct;
-    final double highAndPeakPct;
-
-    if (totalSamples > 0) {
-      moderatePct = (moderateCount / totalSamples) * 100.0;
-      highPct = (highCount / totalSamples) * 100.0;
-      peakPct = (peakCount / totalSamples) * 100.0;
-      highAndPeakPct = ((highCount + peakCount) / totalSamples) * 100.0;
-    } else {
-      moderatePct = 0.0;
-      highPct = 0.0;
-      peakPct = 0.0;
-      highAndPeakPct = 0.0;
-    }
-
-    final double effectiveModerateThreshold =
-        customModerateThreshold ?? moderateThresholdPct;
-    final double effectiveHighAndPeakThreshold =
-        customHighAndPeakThreshold ?? highAndPeakThresholdPct;
-
-    // THUẬT TOÁN ĐỀ BÀI:
-    // Gia tốc mức vừa > 30% VÀ Gia tốc cao + cực đại < 5% => CÓ DI CHUYỂN
-    // Ngược lại => KHÔNG DI CHUYỂN
-    final bool predictedIsMoving =
-        (moderatePct > effectiveModerateThreshold) &&
-        (highAndPeakPct < effectiveHighAndPeakThreshold);
 
     final bool? groundTruth =
         manualGroundTruth ?? determineGroundTruth(session.label);
@@ -364,19 +259,60 @@ class AlgorithmEvaluationService {
 
     return SessionEvaluationResult(
       session: session,
-      totalSamples: totalSamples,
-      moderateCount: moderateCount,
-      highCount: highCount,
-      peakCount: peakCount,
-      moderatePercentage: moderatePct,
-      highPercentage: highPct,
-      peakPercentage: peakPct,
-      highAndPeakPercentage: highAndPeakPct,
-      predictedIsMoving: predictedIsMoving,
-      moderateThresholdPct: effectiveModerateThreshold,
-      highAndPeakThresholdPct: effectiveHighAndPeakThreshold,
+      totalSamples: total,
+      predictedIsMoving: result.isMoving,
+      voteRatio: result.ratio,
+      totalWindows: totalWindows,
+      movingVotes: movingVotes,
       groundTruthIsMoving: groundTruth,
       groundTruthSource: source,
+      config: config,
+    );
+  }
+
+  /// Đánh giá một phiên ghi từ dữ liệu magnitude thô (relativeTime + magnitude)
+  SessionEvaluationResult evaluateRawData({
+    required RecordingSession session,
+    required List<double> tSeconds,
+    required List<double> magnitudes,
+    bool? manualGroundTruth,
+    MotionConfig config = const MotionConfig(),
+  }) {
+    final result = MotionDetector.classifySession(
+      tSeconds,
+      magnitudes,
+      config: config,
+    );
+
+    final duration =
+        tSeconds.isNotEmpty ? tSeconds.last - tSeconds.first : 0.0;
+    final effectiveDuration = duration - config.skipSeconds;
+    int totalWindows = 0;
+    int movingVotes = 0;
+    if (effectiveDuration > config.windowSeconds) {
+      totalWindows =
+          ((effectiveDuration - config.windowSeconds) / config.hopSeconds)
+              .floor() +
+          1;
+      movingVotes = (result.ratio * totalWindows).round();
+    }
+
+    final bool? groundTruth =
+        manualGroundTruth ?? determineGroundTruth(session.label);
+    final String source = manualGroundTruth != null
+        ? 'manual'
+        : (groundTruth != null ? 'auto_keyword' : 'unclassified');
+
+    return SessionEvaluationResult(
+      session: session,
+      totalSamples: tSeconds.length,
+      predictedIsMoving: result.isMoving,
+      voteRatio: result.ratio,
+      totalWindows: totalWindows,
+      movingVotes: movingVotes,
+      groundTruthIsMoving: groundTruth,
+      groundTruthSource: source,
+      config: config,
     );
   }
 

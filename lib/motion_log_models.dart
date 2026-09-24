@@ -33,14 +33,20 @@ class MotionLogEntry {
   final double? y;
   final double? z;
   final MotionSampleCategory category;
-  final int motionCount;
-  final int stillCount;
-  final int windowSize;
+
+  /// Giá trị trung bình magnitude trong cửa sổ hiện tại
+  final double mean;
+
+  /// Hệ số biến thiên (Coefficient of Variation) = std / mean
+  final double cv;
+
+  /// Phiếu thô của cửa sổ hiện tại (true = vote di chuyển)
+  final bool vote;
+
   final bool isMoving;
   final bool stateChanged;
   final String? triggerReason;
   final bool previousState;
-  final int requiredPoints;
 
   const MotionLogEntry({
     required this.timestamp,
@@ -49,18 +55,14 @@ class MotionLogEntry {
     this.y,
     this.z,
     required this.category,
-    required this.motionCount,
-    required this.stillCount,
-    required this.windowSize,
+    required this.mean,
+    required this.cv,
+    required this.vote,
     required this.isMoving,
     required this.stateChanged,
     this.triggerReason,
     required this.previousState,
-    required this.requiredPoints,
   });
-
-  int get requiredMotionPoints => requiredPoints;
-  int get requiredStillPoints => requiredPoints;
 
   /// Định dạng giờ phút giây và mili-giây: HH:mm:ss.SSS
   String get formattedTime {
@@ -133,11 +135,11 @@ class MotionLogEntry {
     final stateStr = isMoving
         ? '${AnsiColor.yellow}MOVING${AnsiColor.reset}'
         : '${AnsiColor.cyan}STILL${AnsiColor.reset}';
-    final progressStr = isMoving
-        ? '$stillCount/$requiredPoints'
-        : '$motionCount/$requiredPoints';
+    final cvStr = cv.toStringAsFixed(3);
+    final meanStr = mean.toStringAsFixed(3);
+    final voteStr = vote ? 'Y' : 'N';
 
-    return '[$formattedTime] $categoryBadge Mag: $magStr m/s² $gaugeBar | [$progressStr] | $stateStr';
+    return '[$formattedTime] $categoryBadge Mag: $magStr m/s² $gaugeBar | CV=$cvStr Mean=$meanStr Vote=$voteStr | $stateStr';
   }
 
   /// Banner nổi bật in ra console khi có sự kiện đổi trạng thái
@@ -147,7 +149,7 @@ class MotionLogEntry {
     final stateColor = isMoving ? AnsiColor.yellow : AnsiColor.cyan;
     final reason =
         triggerReason ??
-        (isMoving ? 'Đủ điểm chuyển động' : 'Đủ điểm đứng yên');
+        (isMoving ? 'Đủ cửa sổ di chuyển liên tiếp' : 'Đủ cửa sổ đứng yên liên tiếp');
     final magStr = magnitude.toStringAsFixed(2);
 
     return '''
@@ -155,7 +157,7 @@ ${AnsiColor.bold}$stateColor╔════════════════�
 ║ ⚡ [STATE CHANGED] $fromState  ➔  $toState
 ║ ⏱ Thời gian     : $formattedTime
 ║ 🎯 Lý do         : $reason
-║ 📊 Mag kích hoạt : $magStr m/s²
+║ 📊 Mag kích hoạt : $magStr m/s²  |  CV: ${cv.toStringAsFixed(3)}  Mean: ${mean.toStringAsFixed(3)}
 ╚══════════════════════════════════════════════════════════════════════════╝${AnsiColor.reset}''';
   }
 }

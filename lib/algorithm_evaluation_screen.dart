@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'algorithm_evaluation_service.dart';
 import 'database/recording_database.dart';
 import 'database/recording_session.dart';
+import 'motion_detector.dart';
 import 'recording_detail_screen.dart';
 
 class AlgorithmEvaluationScreen extends StatefulWidget {
@@ -20,11 +21,15 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
   int _selectedFilterIndex = 0; // 0: Tất cả, 1: Đúng, 2: Sai, 3: Bỏ qua
 
   bool _isRuleExpanded = false;
-  double _moderateThreshold = 30.0;
-  double _highAndPeakThreshold = 5.0;
+
+  // Config thuật toán mới (CV-based)
+  double _cvMax = 0.50;
+  double _meanMin = 0.60;
+  double _sessionRatio = 0.50;
 
   List<RecordingSession> _cachedSessions = [];
-  Map<int, Map<String, int>> _cachedStatsMap = {};
+  Map<int, ({List<double> times, List<double> magnitudes})> _cachedRawDataMap =
+      {};
 
   @override
   void initState() {
@@ -39,11 +44,10 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
     try {
       final sessions = await RecordingDatabase.instance.getAllSessions();
-      final statsMap = await RecordingDatabase.instance
-          .getSessionsMagnitudeDistribution();
+      final rawDataMap = await RecordingDatabase.instance.getSessionsRawData();
 
       _cachedSessions = sessions;
-      _cachedStatsMap = statsMap;
+      _cachedRawDataMap = rawDataMap;
 
       _recomputeResults();
 
@@ -64,33 +68,44 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     }
   }
 
-  List<SessionEvaluationResult> _computeResultsForThresholds(
-    double moderateThreshold,
-    double highThreshold,
-  ) {
+  List<SessionEvaluationResult> _computeResultsForConfig(MotionConfig config) {
     final List<SessionEvaluationResult> list = [];
     for (final session in _cachedSessions) {
       if (session.id == null) continue;
-      final stats = _cachedStatsMap[session.id!];
-
-      final totalSamples = stats?['total_samples'] ?? session.totalSamples;
-      final moderateCount = stats?['moderate_count'] ?? 0;
-      final highCount = stats?['high_count'] ?? 0;
-      final peakCount = stats?['peak_count'] ?? 0;
+      final rawData = _cachedRawDataMap[session.id!];
 
       final manualGt = _manualOverrides.containsKey(session.id!)
           ? _manualOverrides[session.id!]
           : null;
 
-      final res = AlgorithmEvaluationService.instance.evaluateCountData(
+      if (rawData == null || rawData.times.isEmpty) {
+        // Phiên không có dữ liệu
+        list.add(
+          SessionEvaluationResult(
+            session: session,
+            totalSamples: 0,
+            predictedIsMoving: false,
+            voteRatio: 0.0,
+            totalWindows: 0,
+            movingVotes: 0,
+            groundTruthIsMoving:
+                manualGt ??
+                AlgorithmEvaluationService.instance.determineGroundTruth(
+                  session.label,
+                ),
+            groundTruthSource: manualGt != null ? 'manual' : 'auto_keyword',
+            config: config,
+          ),
+        );
+        continue;
+      }
+
+      final res = AlgorithmEvaluationService.instance.evaluateRawData(
         session: session,
-        totalSamples: totalSamples,
-        moderateCount: moderateCount,
-        highCount: highCount,
-        peakCount: peakCount,
+        tSeconds: rawData.times,
+        magnitudes: rawData.magnitudes,
         manualGroundTruth: manualGt,
-        customModerateThreshold: moderateThreshold,
-        customHighAndPeakThreshold: highThreshold,
+        config: config,
       );
 
       list.add(res);
@@ -99,10 +114,12 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
   }
 
   void _recomputeResults() {
-    _results = _computeResultsForThresholds(
-      _moderateThreshold,
-      _highAndPeakThreshold,
+    final config = MotionConfig(
+      cvMax: _cvMax,
+      meanMin: _meanMin,
+      sessionRatio: _sessionRatio,
     );
+    _results = _computeResultsForConfig(config);
   }
 
   void _setManualGroundTruth(int sessionId, bool? value) {
@@ -140,19 +157,25 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Thuật toán đánh giá phiên ghi là "CÓ DI CHUYỂN" khi thỏa mãn đồng thời cả 2 điều kiện:',
+              'Thuật toán CV-based đánh giá phiên ghi bằng cách phân tích cửa sổ trượt:',
               style: TextStyle(fontSize: 13.5, height: 1.4),
             ),
             const SizedBox(height: 12.0),
             _ruleBullet(
-              '1. Gia tốc mức vừa (1.0 – 4.0 m/s²)',
-              '> 30.0% tổng số mẫu',
+              '1. Hệ số biến thiên (CV)',
+              '< ${_cvMax.toStringAsFixed(2)} (dao động đều = di chuyển)',
               Colors.teal.shade700,
             ),
             const SizedBox(height: 8.0),
             _ruleBullet(
-              '2. Gia tốc cao & cực đại (≥ 4.0 m/s²)',
-              '< 5.0% tổng số mẫu',
+              '2. Trung bình magnitude (Mean)',
+              '> ${_meanMin.toStringAsFixed(2)} m/s²',
+              Colors.indigo.shade700,
+            ),
+            const SizedBox(height: 8.0),
+            _ruleBullet(
+              '3. Tỉ lệ cửa sổ di chuyển',
+              '≥ ${(_sessionRatio * 100).toStringAsFixed(0)}% tổng cửa sổ',
               Colors.deepOrange.shade700,
             ),
             const SizedBox(height: 12.0),
@@ -164,7 +187,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 border: Border.all(color: Colors.amber.shade200),
               ),
               child: Text(
-                'Nếu không thỏa mãn 1 trong 2 điều kiện trên, phiên ghi sẽ được kết luận là "KHÔNG DI CHUYỂN".',
+                'Cửa sổ 2.5s, trượt 0.5s. Hysteresis: 3 cửa sổ liên tiếp để vào MOVING, 4 để thoát về STILL. Độ trễ ~2–5 giây.',
                 style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
               ),
             ),
@@ -336,16 +359,16 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     final isMedium = accuracy >= 50.0 && accuracy < 80.0;
 
     final Color statusColor = isGood
-        ? const Color(0xFF10B981) // Emerald Green
+        ? const Color(0xFF10B981)
         : isMedium
-        ? const Color(0xFFF59E0B) // Amber
-        : const Color(0xFFEF4444); // Red
+        ? const Color(0xFFF59E0B)
+        : const Color(0xFFEF4444);
 
     return Container(
       padding: const EdgeInsets.all(20.0),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [const Color(0xFF1E2235), const Color(0xFF272D45)],
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1E2235), Color(0xFF272D45)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -533,22 +556,20 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
   /// Khung hiển thị thông minh mô tả điều kiện di chuyển (Interactive Condition Card)
   Widget _buildRuleSummaryBanner(EvaluationReport report) {
-    final isCustomThreshold =
-        _moderateThreshold != 30.0 || _highAndPeakThreshold != 5.0;
+    final isCustomConfig =
+        _cvMax != 0.50 || _meanMin != 0.60 || _sessionRatio != 0.50;
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16.0),
         border: Border.all(
-          color: isCustomThreshold
-              ? Colors.indigo.shade300
-              : Colors.grey.shade200,
-          width: isCustomThreshold ? 1.5 : 1.0,
+          color: isCustomConfig ? Colors.indigo.shade300 : Colors.grey.shade200,
+          width: isCustomConfig ? 1.5 : 1.0,
         ),
         boxShadow: [
           BoxShadow(
-            color: isCustomThreshold
+            color: isCustomConfig
                 ? Colors.indigo.withValues(alpha: 0.08)
                 : Colors.black.withValues(alpha: 0.03),
             blurRadius: 10.0,
@@ -559,7 +580,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Header Bar: Tiêu đề + Nút thử nghiệm ngưỡng + Nút mở rộng
+          // 1. Header Bar
           InkWell(
             borderRadius: BorderRadius.vertical(
               top: const Radius.circular(16.0),
@@ -579,7 +600,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   Container(
                     padding: const EdgeInsets.all(7.0),
                     decoration: BoxDecoration(
-                      color: isCustomThreshold
+                      color: isCustomConfig
                           ? Colors.indigo.shade50
                           : Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(10.0),
@@ -587,7 +608,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     child: Icon(
                       Icons.tune_rounded,
                       size: 16.0,
-                      color: isCustomThreshold
+                      color: isCustomConfig
                           ? Colors.indigo.shade700
                           : Colors.blue.shade700,
                     ),
@@ -601,7 +622,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           children: [
                             const Flexible(
                               child: Text(
-                                'TIÊU CHÍ PHÁN ĐOÁN DI CHUYỂN',
+                                'THUẬT TOÁN CV-BASED',
                                 style: TextStyle(
                                   fontSize: 12.0,
                                   fontWeight: FontWeight.bold,
@@ -612,7 +633,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (isCustomThreshold) ...[
+                            if (isCustomConfig) ...[
                               const SizedBox(width: 6.0),
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -639,7 +660,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                         Text(
                           _isRuleExpanded
                               ? 'Chạm để thu gọn chi tiết'
-                              : 'Chạm để xem bảng dải gia tốc & công thức',
+                              : 'Chạm để xem chi tiết thuật toán',
                           style: TextStyle(
                             fontSize: 11.0,
                             color: Colors.grey.shade500,
@@ -648,18 +669,18 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                       ],
                     ),
                   ),
-                  // Nút mở BottomSheet thử nghiệm ngưỡng
+                  // Nút mở BottomSheet thử nghiệm config
                   IconButton(
                     icon: Icon(
                       Icons.tune,
                       size: 18.0,
-                      color: isCustomThreshold
+                      color: isCustomConfig
                           ? Colors.indigo.shade700
                           : Colors.grey.shade600,
                     ),
-                    tooltip: 'Thử nghiệm ngưỡng',
+                    tooltip: 'Thử nghiệm tham số',
                     visualDensity: VisualDensity.compact,
-                    onPressed: () => _showThresholdTuningSheet(report),
+                    onPressed: () => _showConfigTuningSheet(report),
                   ),
                   Icon(
                     _isRuleExpanded
@@ -673,22 +694,22 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
             ),
           ),
 
-          // 2. Hai thẻ điều kiện trực quan (Dạng 2 dòng)
+          // 2. Hai thẻ điều kiện trực quan
           Padding(
             padding: const EdgeInsets.fromLTRB(14.0, 4.0, 14.0, 12.0),
             child: Column(
               children: [
-                // Dòng 1: Gia tốc mức vừa
+                // Dòng 1: Hệ số biến thiên CV
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12.0,
                     vertical: 9.0,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF0FDFA), // Teal 50
+                    color: const Color(0xFFF0FDFA),
                     borderRadius: BorderRadius.circular(12.0),
                     border: Border.all(
-                      color: const Color(0xFF99F6E4), // Teal 200
+                      color: const Color(0xFF99F6E4),
                       width: 1.0,
                     ),
                   ),
@@ -701,9 +722,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           borderRadius: BorderRadius.circular(8.0),
                         ),
                         child: const Icon(
-                          Icons.speed_rounded,
+                          Icons.analytics_rounded,
                           size: 15.0,
-                          color: Color(0xFF0F766E), // Teal 700
+                          color: Color(0xFF0F766E),
                         ),
                       ),
                       const SizedBox(width: 10.0),
@@ -712,7 +733,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Gia tốc mức vừa',
+                              'Hệ số biến thiên (CV)',
                               style: TextStyle(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.bold,
@@ -721,7 +742,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                             ),
                             SizedBox(height: 1.0),
                             Text(
-                              'Dải chuyển động: 1.0 – 4.0 m/s²',
+                              'CV = std / mean trên cửa sổ trượt',
                               style: TextStyle(
                                 fontSize: 10.5,
                                 color: Color(0xFF115E59),
@@ -744,14 +765,14 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
-                              'Yêu cầu ',
+                              'CV ',
                               style: TextStyle(
                                 fontSize: 11.0,
                                 color: Color(0xFF134E4A),
                               ),
                             ),
                             Text(
-                              '> ${_moderateThreshold.toStringAsFixed(0)}%',
+                              '< ${_cvMax.toStringAsFixed(2)}',
                               style: const TextStyle(
                                 fontSize: 13.0,
                                 fontWeight: FontWeight.bold,
@@ -806,17 +827,17 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   ),
                 ),
 
-                // Dòng 2: Gia tốc cao & cực đại
+                // Dòng 2: Trung bình magnitude
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12.0,
                     vertical: 9.0,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF7ED), // Orange 50
+                    color: const Color(0xFFEEF2FF), // Indigo 50
                     borderRadius: BorderRadius.circular(12.0),
                     border: Border.all(
-                      color: const Color(0xFFFED7AA), // Orange 200
+                      color: const Color(0xFFC7D2FE), // Indigo 200
                       width: 1.0,
                     ),
                   ),
@@ -825,13 +846,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                       Container(
                         padding: const EdgeInsets.all(6.0),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFEDD5),
+                          color: const Color(0xFFE0E7FF),
                           borderRadius: BorderRadius.circular(8.0),
                         ),
                         child: const Icon(
-                          Icons.warning_amber_rounded,
+                          Icons.speed_rounded,
                           size: 15.0,
-                          color: Color(0xFFC2410C), // Orange 700
+                          color: Color(0xFF4338CA), // Indigo 700
                         ),
                       ),
                       const SizedBox(width: 10.0),
@@ -840,19 +861,19 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Gia tốc cao & cực đại',
+                              'Trung bình magnitude',
                               style: TextStyle(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFFC2410C),
+                                color: Color(0xFF4338CA),
                               ),
                             ),
                             SizedBox(height: 1.0),
                             Text(
-                              'Dải va đập, xóc: ≥ 4.0 m/s²',
+                              'Trung bình gia tốc trong cửa sổ',
                               style: TextStyle(
                                 fontSize: 10.5,
-                                color: Color(0xFF9A3412),
+                                color: Color(0xFF3730A3),
                               ),
                             ),
                           ],
@@ -866,24 +887,24 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(8.0),
-                          border: Border.all(color: const Color(0xFFFDBA74)),
+                          border: Border.all(color: const Color(0xFFA5B4FC)),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             const Text(
-                              'Yêu cầu ',
+                              'Mean ',
                               style: TextStyle(
                                 fontSize: 11.0,
-                                color: Color(0xFF7C2D12),
+                                color: Color(0xFF312E81),
                               ),
                             ),
                             Text(
-                              '< ${_highAndPeakThreshold.toStringAsFixed(0)}%',
+                              '> ${_meanMin.toStringAsFixed(2)}',
                               style: const TextStyle(
                                 fontSize: 13.0,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFFC2410C),
+                                color: Color(0xFF4338CA),
                               ),
                             ),
                           ],
@@ -914,17 +935,19 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 top: BorderSide(color: Colors.grey.shade200, width: 0.8),
               ),
             ),
-            child: Row(
+            child: Wrap(
+              spacing: 4.0,
+              runSpacing: 4.0,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 const Icon(
                   Icons.arrow_right_alt_rounded,
                   size: 16.0,
                   color: Colors.black54,
                 ),
-                const SizedBox(width: 4.0),
-                const Text(
-                  'Thỏa mãn: ',
-                  style: TextStyle(fontSize: 11.0, color: Colors.black54),
+                Text(
+                  'Tỉ lệ vote ≥ ${(_sessionRatio * 100).toStringAsFixed(0)}%:',
+                  style: const TextStyle(fontSize: 11.0, color: Colors.black54),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -944,9 +967,8 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ),
                   ),
                 ),
-                const Spacer(),
                 const Text(
-                  'Còn lại: ',
+                  'Còn lại:',
                   style: TextStyle(fontSize: 11.0, color: Colors.black54),
                 ),
                 Container(
@@ -971,7 +993,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
             ),
           ),
 
-          // 4. Khối Mở rộng chi tiết (Khi _isRuleExpanded == true)
+          // 4. Khối Mở rộng chi tiết
           if (_isRuleExpanded)
             Container(
               padding: const EdgeInsets.all(14.0),
@@ -988,7 +1010,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'BẢNG PHÂN LOẠI DẢI GIA TỐC (m/s²):',
+                    'THAM SỐ CỬA SỔ TRƯỢT:',
                     style: TextStyle(
                       fontSize: 11.0,
                       fontWeight: FontWeight.bold,
@@ -997,33 +1019,32 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ),
                   ),
                   const SizedBox(height: 8.0),
-                  _buildRangeTableRow(
-                    range: '< 1.0 m/s²',
-                    name: 'Tĩnh',
-                    color: Colors.grey.shade600,
+                  _buildConfigInfoRow('Cửa sổ', '2.5s', Colors.teal.shade600),
+                  const SizedBox(height: 6.0),
+                  _buildConfigInfoRow(
+                    'Bước trượt',
+                    '0.5s',
+                    Colors.teal.shade600,
                   ),
                   const SizedBox(height: 6.0),
-                  _buildRangeTableRow(
-                    range: '1.0 – 4.0 m/s²',
-                    name: 'Gia tốc mức vừa',
-                    color: const Color(0xFF0F766E),
-                    isHighlighted: true,
+                  _buildConfigInfoRow(
+                    'Hysteresis vào',
+                    '3 cửa sổ liên tiếp',
+                    Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 6.0),
-                  _buildRangeTableRow(
-                    range: '4.0 – 8.0 m/s²',
-                    name: 'Gia tốc cao',
-                    color: const Color(0xFFC2410C),
+                  _buildConfigInfoRow(
+                    'Hysteresis ra',
+                    '4 cửa sổ liên tiếp',
+                    Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 6.0),
-                  _buildRangeTableRow(
-                    range: '> 8.0 m/s²',
-                    name: 'Gia tốc cực đại',
-                    color: const Color(0xFFB91C1C),
-                    isHighlighted: true,
+                  _buildConfigInfoRow(
+                    'Bỏ qua đầu phiên',
+                    '1.5s',
+                    Colors.amber.shade800,
                   ),
                   const SizedBox(height: 12.0),
-                  // Nút mở bộ tinh chỉnh
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -1035,10 +1056,10 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                       ),
                       icon: const Icon(Icons.tune_rounded, size: 16.0),
                       label: const Text(
-                        'Thử nghiệm thay đổi ngưỡng thuật toán',
+                        'Thử nghiệm thay đổi tham số thuật toán',
                         style: TextStyle(fontSize: 12.0),
                       ),
-                      onPressed: () => _showThresholdTuningSheet(report),
+                      onPressed: () => _showConfigTuningSheet(report),
                     ),
                   ),
                 ],
@@ -1049,25 +1070,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     );
   }
 
-  Widget _buildRangeTableRow({
-    required String range,
-    required String name,
-    required Color color,
-    bool isHighlighted = false,
-  }) {
+  Widget _buildConfigInfoRow(String label, String value, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
       decoration: BoxDecoration(
-        color: isHighlighted
-            ? color.withValues(alpha: 0.08)
-            : const Color(0xFFF8FAFC),
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8.0),
-        border: Border.all(
-          color: isHighlighted
-              ? color.withValues(alpha: 0.3)
-              : Colors.grey.shade200,
-          width: 0.8,
-        ),
+        border: Border.all(color: Colors.grey.shade200, width: 0.8),
       ),
       child: Row(
         children: [
@@ -1079,7 +1088,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
               border: Border.all(color: color.withValues(alpha: 0.4)),
             ),
             child: Text(
-              range,
+              label,
               style: TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.bold,
@@ -1090,11 +1099,11 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           const SizedBox(width: 8.0),
           Expanded(
             child: Text(
-              name,
-              style: TextStyle(
+              value,
+              style: const TextStyle(
                 fontSize: 11.5,
-                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.w600,
-                color: isHighlighted ? color : Colors.black87,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
               ),
             ),
           ),
@@ -1103,9 +1112,10 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     );
   }
 
-  void _showThresholdTuningSheet(EvaluationReport currentReport) {
-    double tempModerate = _moderateThreshold;
-    double tempHigh = _highAndPeakThreshold;
+  void _showConfigTuningSheet(EvaluationReport currentReport) {
+    double tempCvMax = _cvMax;
+    double tempMeanMin = _meanMin;
+    double tempSessionRatio = _sessionRatio;
 
     showModalBottomSheet(
       context: context,
@@ -1113,13 +1123,18 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setSheetState) {
-          final previewResults = _computeResultsForThresholds(
-            tempModerate,
-            tempHigh,
+          final previewConfig = MotionConfig(
+            cvMax: tempCvMax,
+            meanMin: tempMeanMin,
+            sessionRatio: tempSessionRatio,
           );
+          final previewResults = _computeResultsForConfig(previewConfig);
           final previewReport = AlgorithmEvaluationService.instance
               .generateReport(previewResults);
-          final isModified = tempModerate != 30.0 || tempHigh != 5.0;
+          final isModified =
+              tempCvMax != 0.50 ||
+              tempMeanMin != 0.60 ||
+              tempSessionRatio != 0.50;
 
           return Container(
             decoration: const BoxDecoration(
@@ -1168,7 +1183,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Thử Nghiệm Ngưỡng Thuật Toán',
+                              'Thử Nghiệm Tham Số Thuật Toán',
                               style: TextStyle(
                                 fontSize: 16.0,
                                 fontWeight: FontWeight.bold,
@@ -1188,8 +1203,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                         TextButton(
                           onPressed: () {
                             setSheetState(() {
-                              tempModerate = 30.0;
-                              tempHigh = 5.0;
+                              tempCvMax = 0.50;
+                              tempMeanMin = 0.60;
+                              tempSessionRatio = 0.50;
                             });
                           },
                           child: const Text(
@@ -1201,7 +1217,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   ),
                   const SizedBox(height: 16.0),
 
-                  // Preview Card: Độ chính xác theo ngưỡng mới
+                  // Preview Card
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16.0,
@@ -1282,20 +1298,20 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
                   const SizedBox(height: 18.0),
 
-                  // Slider 1: Ngưỡng Gia tốc mức vừa
+                  // Slider 1: CV Max
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Row(
                         children: [
                           Icon(
-                            Icons.speed_rounded,
+                            Icons.analytics_rounded,
                             size: 16.0,
                             color: Colors.teal.shade700,
                           ),
                           const SizedBox(width: 6.0),
                           const Text(
-                            'Gia tốc mức vừa (1.0–4.0 m/s²)',
+                            'CV max (hệ số biến thiên)',
                             style: TextStyle(
                               fontSize: 13.0,
                               fontWeight: FontWeight.w600,
@@ -1314,7 +1330,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           border: Border.all(color: Colors.teal.shade200),
                         ),
                         child: Text(
-                          '> ${tempModerate.toStringAsFixed(0)}%',
+                          '< ${tempCvMax.toStringAsFixed(2)}',
                           style: TextStyle(
                             fontSize: 13.0,
                             fontWeight: FontWeight.bold,
@@ -1325,35 +1341,93 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ],
                   ),
                   Slider(
-                    value: tempModerate,
-                    min: 10.0,
-                    max: 60.0,
-                    divisions: 10,
+                    value: tempCvMax,
+                    min: 0.10,
+                    max: 1.00,
+                    divisions: 18,
                     activeColor: const Color(0xFF0F766E),
                     inactiveColor: Colors.teal.shade100,
                     onChanged: (val) {
                       setSheetState(() {
-                        tempModerate = val;
+                        tempCvMax = val;
                       });
                     },
                   ),
 
                   const SizedBox(height: 10.0),
 
-                  // Slider 2: Ngưỡng Gia tốc cao + cực đại
+                  // Slider 2: Mean Min
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Row(
                         children: [
                           Icon(
-                            Icons.warning_amber_rounded,
+                            Icons.speed_rounded,
+                            size: 16.0,
+                            color: Colors.indigo.shade700,
+                          ),
+                          const SizedBox(width: 6.0),
+                          const Text(
+                            'Mean min (trung bình tối thiểu)',
+                            style: TextStyle(
+                              fontSize: 13.0,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.shade50,
+                          borderRadius: BorderRadius.circular(6.0),
+                          border: Border.all(color: Colors.indigo.shade200),
+                        ),
+                        child: Text(
+                          '> ${tempMeanMin.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 13.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.indigo.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: tempMeanMin,
+                    min: 0.10,
+                    max: 2.00,
+                    divisions: 19,
+                    activeColor: const Color(0xFF4338CA),
+                    inactiveColor: Colors.indigo.shade100,
+                    onChanged: (val) {
+                      setSheetState(() {
+                        tempMeanMin = val;
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 10.0),
+
+                  // Slider 3: Session Ratio
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.pie_chart_rounded,
                             size: 16.0,
                             color: Colors.deepOrange.shade700,
                           ),
                           const SizedBox(width: 6.0),
                           const Text(
-                            'Gia tốc cao & cực đại (≥ 4.0 m/s²)',
+                            'Tỉ lệ cửa sổ di chuyển',
                             style: TextStyle(
                               fontSize: 13.0,
                               fontWeight: FontWeight.w600,
@@ -1372,7 +1446,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                           border: Border.all(color: Colors.deepOrange.shade200),
                         ),
                         child: Text(
-                          '< ${tempHigh.toStringAsFixed(0)}%',
+                          '≥ ${(tempSessionRatio * 100).toStringAsFixed(0)}%',
                           style: TextStyle(
                             fontSize: 13.0,
                             fontWeight: FontWeight.bold,
@@ -1383,15 +1457,15 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ],
                   ),
                   Slider(
-                    value: tempHigh,
-                    min: 1.0,
-                    max: 20.0,
-                    divisions: 19,
+                    value: tempSessionRatio,
+                    min: 0.10,
+                    max: 0.90,
+                    divisions: 16,
                     activeColor: const Color(0xFFC2410C),
                     inactiveColor: Colors.deepOrange.shade100,
                     onChanged: (val) {
                       setSheetState(() {
-                        tempHigh = val;
+                        tempSessionRatio = val;
                       });
                     },
                   ),
@@ -1414,12 +1488,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                             backgroundColor: const Color(0xFF1E2235),
                           ),
                           icon: const Icon(Icons.check_rounded, size: 18.0),
-                          label: const Text('Áp dụng ngưỡng'),
+                          label: const Text('Áp dụng tham số'),
                           onPressed: () {
                             Navigator.of(ctx).pop();
                             setState(() {
-                              _moderateThreshold = tempModerate;
-                              _highAndPeakThreshold = tempHigh;
+                              _cvMax = tempCvMax;
+                              _meanMin = tempMeanMin;
+                              _sessionRatio = tempSessionRatio;
                               _recomputeResults();
                             });
                           },
@@ -1599,7 +1674,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
             const SizedBox(height: 12.0),
 
-            // Dòng 2: Chi tiết tỷ lệ % gia tốc
+            // Dòng 2: Chi tiết tỉ lệ vote (CV-based)
             Container(
               padding: const EdgeInsets.all(12.0),
               decoration: BoxDecoration(
@@ -1610,22 +1685,31 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
               child: Column(
                 children: [
                   _buildMetricRow(
-                    label: 'Gia tốc vừa (1.0–4.0 m/s²)',
-                    percentage: result.moderatePercentage,
+                    label: 'Tỉ lệ cửa sổ di chuyển',
+                    percentage: result.voteRatio * 100,
                     thresholdText:
-                        'Yêu cầu > ${result.moderateThresholdPct.toStringAsFixed(0)}%',
-                    isPassed:
-                        result.moderatePercentage > result.moderateThresholdPct,
+                        'Yêu cầu ≥ ${(result.config.sessionRatio * 100).toStringAsFixed(0)}%',
+                    isPassed: result.voteRatio >= result.config.sessionRatio,
                   ),
-                  const SizedBox(height: 8.0),
-                  _buildMetricRow(
-                    label: 'Gia tốc cao & cực đại (≥ 4.0 m/s²)',
-                    percentage: result.highAndPeakPercentage,
-                    thresholdText:
-                        'Yêu cầu < ${result.highAndPeakThresholdPct.toStringAsFixed(0)}%',
-                    isPassed:
-                        result.highAndPeakPercentage <
-                        result.highAndPeakThresholdPct,
+                  const SizedBox(height: 6.0),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '${result.movingVotes}/${result.totalWindows} cửa sổ vote di chuyển',
+                        style: TextStyle(
+                          fontSize: 11.0,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      Text(
+                        '${result.totalSamples} mẫu',
+                        style: TextStyle(
+                          fontSize: 11.0,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1950,7 +2034,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     }
   }
 
-  /// Hàng thanh đo % gia tốc
+  /// Hàng thanh đo % vote ratio
   Widget _buildMetricRow({
     required String label,
     required double percentage,
@@ -2042,12 +2126,9 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 ),
               ),
               const SizedBox(height: 16.0),
-              Text(
+              const Text(
                 'Chọn Nhãn Thực Tế (Ground Truth)',
-                style: const TextStyle(
-                  fontSize: 16.0,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6.0),
               Text(

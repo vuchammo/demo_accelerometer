@@ -237,5 +237,30 @@ class RecordingDatabase {
     }
     return map;
   }
+
+  /// Lấy dữ liệu thô (relative_time, magnitude) cho tất cả phiên ghi
+  /// để phục vụ thuật toán CV-based đánh giá offline.
+  Future<Map<int, ({List<double> times, List<double> magnitudes})>>
+      getSessionsRawData() async {
+    final db = await database;
+    final results = await db.rawQuery('''
+      SELECT session_id, relative_time, magnitude
+      FROM recording_data_points
+      ORDER BY session_id, relative_time ASC
+    ''');
+
+    final map = <int, ({List<double> times, List<double> magnitudes})>{};
+    for (final row in results) {
+      final sessionId = row['session_id'] as int;
+      final t = (row['relative_time'] as num).toDouble();
+      final m = (row['magnitude'] as num).toDouble();
+      if (!map.containsKey(sessionId)) {
+        map[sessionId] = (times: <double>[], magnitudes: <double>[]);
+      }
+      map[sessionId]!.times.add(t);
+      map[sessionId]!.magnitudes.add(m);
+    }
+    return map;
+  }
 }
 
