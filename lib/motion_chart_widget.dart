@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'chart_data_point.dart';
 import 'motion_log_models.dart';
 
-class MotionChart extends StatelessWidget {
+class MotionChart extends StatefulWidget {
   final List<ChartDataPoint> dataPoints;
   final double thresholdMin;
   final double thresholdMax;
@@ -16,16 +16,32 @@ class MotionChart extends StatelessWidget {
     required this.thresholdMax,
   });
 
+  @override
+  State<MotionChart> createState() => _MotionChartState();
+}
+
+class _MotionChartState extends State<MotionChart> {
   static const double _maxY = 12.0;
+  static const double _windowDuration = 3.0; // hiển thị 3 giây
+  static const Color _bgColor = Color(0xFF282E45);
+  static const Color _gridColor = Colors.white10;
+  static const Color _borderColor = Color(0xff37434d);
+
+  bool _showAvg = false;
+
+  // Màu cho từng category
+  static const Color _stillColor = Color(0xFFFFC300); // Vàng
+  static const Color _motionColor = Color(0xFF3BFF49); // Xanh lá
+  static const Color _spikeColor = Color(0xFFE80054); // Đỏ
 
   Color _colorForCategory(MotionSampleCategory category) {
     switch (category) {
       case MotionSampleCategory.still:
-        return Colors.amber.shade600;
+        return _stillColor;
       case MotionSampleCategory.motion:
-        return Colors.green.shade500;
+        return _motionColor;
       case MotionSampleCategory.spike:
-        return Colors.red.shade500;
+        return _spikeColor;
     }
   }
 
@@ -33,233 +49,411 @@ class MotionChart extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20.0),
-      padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.fromLTRB(12.0, 24.0, 18.0, 12.0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _bgColor,
         borderRadius: BorderRadius.circular(20.0),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16.0,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 20.0,
+            offset: const Offset(0, 8),
           ),
         ],
-        border: Border.all(color: Colors.grey.shade200),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Biểu đồ Magnitude',
-            style: TextStyle(
-              fontSize: 15.0,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
+          // Header: title + avg button
+          Padding(
+            padding: const EdgeInsets.only(left: 4.0, right: 0, bottom: 8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Biểu đồ Magnitude',
+                  style: TextStyle(
+                    fontSize: 15.0,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(
+                  width: 60,
+                  height: 34,
+                  child: TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _showAvg = !_showAvg;
+                      });
+                    },
+                    child: Text(
+                      'avg',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _showAvg
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.5),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 16.0),
-          SizedBox(
-            height: 200.0,
-            child: dataPoints.isEmpty
+          // Chart
+          AspectRatio(
+            aspectRatio: 1.70,
+            child: widget.dataPoints.isEmpty
                 ? const Center(
                     child: Text(
                       'Đang chờ dữ liệu...',
-                      style: TextStyle(color: Colors.grey, fontSize: 14.0),
+                      style: TextStyle(color: Colors.white38, fontSize: 14.0),
                     ),
                   )
-                : _buildChart(),
+                : LineChart(
+                    _showAvg ? _avgData() : _mainData(),
+                    duration: const Duration(milliseconds: 150),
+                    curve: Curves.linear,
+                  ),
           ),
-          const SizedBox(height: 12.0),
+          const SizedBox(height: 16.0),
           _buildLegend(),
         ],
       ),
     );
   }
 
-  Widget _buildChart() {
+  // Tính window hiển thị (minX, maxX) dựa trên relativeTime
+  ({double minX, double maxX}) _calcWindow() {
+    if (widget.dataPoints.isEmpty) return (minX: 0, maxX: _windowDuration);
+    final lastTime = widget.dataPoints.last.relativeTime;
+    final maxX = lastTime < _windowDuration ? _windowDuration : lastTime;
+    final minX = maxX - _windowDuration;
+    return (minX: minX < 0 ? 0 : minX, maxX: maxX);
+  }
+
+  // --- Main Data ---
+  LineChartData _mainData() {
+    final window = _calcWindow();
+
     final spots = <FlSpot>[];
-    for (int i = 0; i < dataPoints.length; i++) {
-      spots.add(FlSpot(i.toDouble(), dataPoints[i].magnitude.clamp(0, _maxY)));
+    final visibleColors = <Color>[];
+    final visibleStops = <double>[];
+
+    for (int i = 0; i < widget.dataPoints.length; i++) {
+      final p = widget.dataPoints[i];
+      spots.add(FlSpot(p.relativeTime, p.magnitude.clamp(0, _maxY)));
     }
 
-    // Tạo gradient stops dựa trên category từng điểm
-    final gradientColors = <Color>[];
-    final gradientStops = <double>[];
-    if (dataPoints.length == 1) {
-      gradientColors.add(_colorForCategory(dataPoints[0].category));
-      gradientStops.add(0.0);
+    // Gradient colors cho visible data points
+    if (widget.dataPoints.length == 1) {
+      visibleColors.add(_colorForCategory(widget.dataPoints[0].category));
+      visibleStops.add(0.0);
     } else {
-      for (int i = 0; i < dataPoints.length; i++) {
-        gradientColors.add(_colorForCategory(dataPoints[i].category));
-        gradientStops.add(i / (dataPoints.length - 1));
+      for (int i = 0; i < widget.dataPoints.length; i++) {
+        visibleColors
+            .add(_colorForCategory(widget.dataPoints[i].category));
+        visibleStops.add(i / (widget.dataPoints.length - 1));
       }
     }
 
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: (dataPoints.length - 1).toDouble().clamp(1, double.infinity),
-        minY: 0,
-        maxY: _maxY,
-        clipData: const FlClipData.all(),
-        gridData: FlGridData(
-          show: true,
-          drawVerticalLine: false,
-          horizontalInterval: 2.0,
-          getDrawingHorizontalLine: (value) =>
-              FlLine(color: Colors.grey.shade200, strokeWidth: 0.5),
+    return LineChartData(
+      minX: window.minX,
+      maxX: window.maxX,
+      minY: 0,
+      maxY: _maxY,
+      clipData: const FlClipData.all(),
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: true,
+        horizontalInterval: 2,
+        verticalInterval: _windowDuration / 5,
+        getDrawingHorizontalLine: (value) =>
+            const FlLine(color: _gridColor, strokeWidth: 1),
+        getDrawingVerticalLine: (value) =>
+            const FlLine(color: _gridColor, strokeWidth: 1),
+      ),
+      titlesData: FlTitlesData(
+        show: true,
+        topTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
         ),
-        titlesData: FlTitlesData(
-          topTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          rightTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          bottomTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          leftTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 36,
-              interval: 2.0,
-              getTitlesWidget: (value, meta) {
-                if (value == meta.max || value == meta.min) {
-                  return const SizedBox.shrink();
-                }
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6.0),
-                  child: Text(
-                    value.toInt().toString(),
-                    style: TextStyle(
-                      fontSize: 10.0,
-                      color: Colors.grey.shade500,
-                    ),
-                  ),
-                );
-              },
-            ),
+        rightTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
+        bottomTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 30,
+            interval: _windowDuration / 5,
+            getTitlesWidget: _bottomTitleWidgets,
           ),
         ),
-        borderData: FlBorderData(show: false),
-        extraLinesData: ExtraLinesData(
-          horizontalLines: [
-            // Đường ngưỡng tối thiểu
-            HorizontalLine(
-              y: thresholdMin,
-              color: Colors.green.shade300,
-              strokeWidth: 1.2,
-              dashArray: [6, 4],
-              label: HorizontalLineLabel(
-                show: true,
-                alignment: Alignment.topRight,
-                padding: const EdgeInsets.only(right: 4, bottom: 2),
-                style: TextStyle(
-                  fontSize: 9.0,
-                  color: Colors.green.shade600,
-                  fontWeight: FontWeight.w600,
-                ),
-                labelResolver: (_) => 'Min ${thresholdMin.toStringAsFixed(1)}',
-              ),
-            ),
-            // Đường ngưỡng tối đa
-            HorizontalLine(
-              y: thresholdMax,
-              color: Colors.red.shade300,
-              strokeWidth: 1.2,
-              dashArray: [6, 4],
-              label: HorizontalLineLabel(
-                show: true,
-                alignment: Alignment.topRight,
-                padding: const EdgeInsets.only(right: 4, bottom: 2),
-                style: TextStyle(
-                  fontSize: 9.0,
-                  color: Colors.red.shade600,
-                  fontWeight: FontWeight.w600,
-                ),
-                labelResolver: (_) => 'Max ${thresholdMax.toStringAsFixed(1)}',
-              ),
-            ),
-          ],
-        ),
-        // Vùng tô nền giữa 2 ngưỡng (vùng chuyển động)
-        rangeAnnotations: RangeAnnotations(
-          horizontalRangeAnnotations: [
-            HorizontalRangeAnnotation(
-              y1: thresholdMin,
-              y2: thresholdMax,
-              color: Colors.green.withValues(alpha: 0.06),
-            ),
-          ],
-        ),
-        lineTouchData: LineTouchData(
-          touchTooltipData: LineTouchTooltipData(
-            getTooltipColor: (_) => Colors.blueGrey.shade800,
-            tooltipRoundedRadius: 8.0,
-            getTooltipItems: (touchedSpots) {
-              return touchedSpots.map((spot) {
-                final index = spot.x.toInt();
-                if (index < 0 || index >= dataPoints.length) return null;
-                final point = dataPoints[index];
-                final categoryName = _categoryLabel(point.category);
-                return LineTooltipItem(
-                  '${point.magnitude.toStringAsFixed(2)} m/s²\n$categoryName',
-                  const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12.0,
-                    fontWeight: FontWeight.w600,
-                  ),
-                );
-              }).toList();
-            },
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            interval: 2,
+            getTitlesWidget: _leftTitleWidgets,
+            reservedSize: 42,
           ),
         ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            curveSmoothness: 0.2,
-            preventCurveOverShooting: true,
-            gradient: LinearGradient(
-              colors: gradientColors,
-              stops: gradientStops,
-            ),
-            barWidth: 2.5,
-            isStrokeCapRound: true,
-            dotData: FlDotData(
+      ),
+      borderData: FlBorderData(
+        show: true,
+        border: Border.all(color: _borderColor),
+      ),
+      extraLinesData: ExtraLinesData(
+        horizontalLines: [
+          HorizontalLine(
+            y: widget.thresholdMin,
+            color: _motionColor.withValues(alpha: 0.5),
+            strokeWidth: 1.2,
+            dashArray: [6, 4],
+            label: HorizontalLineLabel(
               show: true,
-              getDotPainter: (spot, percent, bar, index) {
-                if (index < 0 || index >= dataPoints.length) {
-                  return FlDotCirclePainter(radius: 2.0, color: Colors.grey);
-                }
-                final color = _colorForCategory(dataPoints[index].category);
-                // Điểm cuối cùng lớn hơn
-                final isLast = index == dataPoints.length - 1;
-                return FlDotCirclePainter(
-                  radius: isLast ? 4.0 : 2.0,
-                  color: color,
-                  strokeWidth: isLast ? 2.0 : 0,
-                  strokeColor: Colors.white,
-                );
-              },
-            ),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                colors: gradientColors
-                    .map((c) => c.withValues(alpha: 0.12))
-                    .toList(),
-                stops: gradientStops,
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
+              alignment: Alignment.topRight,
+              padding: const EdgeInsets.only(right: 4, bottom: 2),
+              style: TextStyle(
+                fontSize: 9.0,
+                color: _motionColor.withValues(alpha: 0.8),
+                fontWeight: FontWeight.w600,
               ),
+              labelResolver: (_) =>
+                  'Min ${widget.thresholdMin.toStringAsFixed(1)}',
+            ),
+          ),
+          HorizontalLine(
+            y: widget.thresholdMax,
+            color: _spikeColor.withValues(alpha: 0.5),
+            strokeWidth: 1.2,
+            dashArray: [6, 4],
+            label: HorizontalLineLabel(
+              show: true,
+              alignment: Alignment.topRight,
+              padding: const EdgeInsets.only(right: 4, bottom: 2),
+              style: TextStyle(
+                fontSize: 9.0,
+                color: _spikeColor.withValues(alpha: 0.8),
+                fontWeight: FontWeight.w600,
+              ),
+              labelResolver: (_) =>
+                  'Max ${widget.thresholdMax.toStringAsFixed(1)}',
             ),
           ),
         ],
       ),
-      duration: const Duration(milliseconds: 150),
-      curve: Curves.easeInOut,
+      rangeAnnotations: RangeAnnotations(
+        horizontalRangeAnnotations: [
+          HorizontalRangeAnnotation(
+            y1: widget.thresholdMin,
+            y2: widget.thresholdMax,
+            color: _motionColor.withValues(alpha: 0.05),
+          ),
+        ],
+      ),
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => const Color(0xFF1B2339),
+          tooltipRoundedRadius: 8.0,
+          getTooltipItems: (touchedSpots) {
+            return touchedSpots.map((spot) {
+              // Tìm data point gần nhất
+              ChartDataPoint? closest;
+              double minDist = double.infinity;
+              for (final p in widget.dataPoints) {
+                final dist = (p.relativeTime - spot.x).abs();
+                if (dist < minDist) {
+                  minDist = dist;
+                  closest = p;
+                }
+              }
+              if (closest == null) return null;
+              final categoryName = _categoryLabel(closest.category);
+              return LineTooltipItem(
+                '${closest.magnitude.toStringAsFixed(2)} m/s²\n'
+                '$categoryName • ${closest.relativeTime.toStringAsFixed(1)}s',
+                const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12.0,
+                  fontWeight: FontWeight.w600,
+                ),
+              );
+            }).toList();
+          },
+        ),
+      ),
+      lineBarsData: [
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          curveSmoothness: 0.25,
+          preventCurveOverShooting: true,
+          gradient: LinearGradient(
+            colors: visibleColors,
+            stops: visibleStops,
+          ),
+          barWidth: 4,
+          isStrokeCapRound: true,
+          dotData: const FlDotData(show: false),
+          belowBarData: BarAreaData(
+            show: true,
+            gradient: LinearGradient(
+              colors: visibleColors
+                  .map((c) => c.withValues(alpha: 0.3))
+                  .toList(),
+              stops: visibleStops,
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- Average Data ---
+  LineChartData _avgData() {
+    if (widget.dataPoints.isEmpty) return _mainData();
+
+    final window = _calcWindow();
+
+    double sum = 0;
+    for (final p in widget.dataPoints) {
+      sum += p.magnitude;
+    }
+    final avg = sum / widget.dataPoints.length;
+
+    final avgSpots = <FlSpot>[
+      FlSpot(window.minX, avg.clamp(0, _maxY)),
+      FlSpot(window.maxX, avg.clamp(0, _maxY)),
+    ];
+
+    const blendedColor = Color(0xFF50E4FF);
+
+    return LineChartData(
+      minX: window.minX,
+      maxX: window.maxX,
+      minY: 0,
+      maxY: _maxY,
+      clipData: const FlClipData.all(),
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => const Color(0xFF1B2339),
+          tooltipRoundedRadius: 8.0,
+          getTooltipItems: (touchedSpots) {
+            return touchedSpots.map((spot) {
+              return LineTooltipItem(
+                'Avg: ${avg.toStringAsFixed(2)} m/s²',
+                const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12.0,
+                  fontWeight: FontWeight.w600,
+                ),
+              );
+            }).toList();
+          },
+        ),
+      ),
+      gridData: FlGridData(
+        show: true,
+        drawHorizontalLine: true,
+        drawVerticalLine: true,
+        horizontalInterval: 2,
+        verticalInterval: _windowDuration / 5,
+        getDrawingVerticalLine: (value) =>
+            const FlLine(color: _borderColor, strokeWidth: 1),
+        getDrawingHorizontalLine: (value) =>
+            const FlLine(color: _borderColor, strokeWidth: 1),
+      ),
+      titlesData: FlTitlesData(
+        show: true,
+        topTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
+        rightTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
+        bottomTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 30,
+            interval: _windowDuration / 5,
+            getTitlesWidget: _bottomTitleWidgets,
+          ),
+        ),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            getTitlesWidget: _leftTitleWidgets,
+            reservedSize: 42,
+            interval: 2,
+          ),
+        ),
+      ),
+      borderData: FlBorderData(
+        show: true,
+        border: Border.all(color: _borderColor),
+      ),
+      extraLinesData: ExtraLinesData(
+        horizontalLines: [
+          HorizontalLine(
+            y: widget.thresholdMin,
+            color: _motionColor.withValues(alpha: 0.3),
+            strokeWidth: 1,
+            dashArray: [6, 4],
+          ),
+          HorizontalLine(
+            y: widget.thresholdMax,
+            color: _spikeColor.withValues(alpha: 0.3),
+            strokeWidth: 1,
+            dashArray: [6, 4],
+          ),
+        ],
+      ),
+      lineBarsData: [
+        LineChartBarData(
+          spots: avgSpots,
+          isCurved: false,
+          color: blendedColor,
+          barWidth: 5,
+          isStrokeCapRound: true,
+          dotData: const FlDotData(show: false),
+          belowBarData: BarAreaData(
+            show: true,
+            color: blendedColor.withValues(alpha: 0.1),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- Title widgets ---
+  Widget _bottomTitleWidgets(double value, TitleMeta meta) {
+    return SideTitleWidget(
+      meta: meta,
+      child: Text(
+        '${value.toStringAsFixed(1)}s',
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 10,
+          color: Colors.white38,
+        ),
+      ),
+    );
+  }
+
+  Widget _leftTitleWidgets(double value, TitleMeta meta) {
+    if (value == meta.max || value == meta.min) return const SizedBox.shrink();
+    return Text(
+      value.toInt().toString(),
+      style: const TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 12,
+        color: Colors.white54,
+      ),
+      textAlign: TextAlign.left,
     );
   }
 
@@ -278,11 +472,11 @@ class MotionChart extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _legendItem(Colors.amber.shade600, 'Đứng yên'),
+        _legendItem(_stillColor, 'Đứng yên'),
         const SizedBox(width: 16.0),
-        _legendItem(Colors.green.shade500, 'Chuyển động'),
+        _legendItem(_motionColor, 'Chuyển động'),
         const SizedBox(width: 16.0),
-        _legendItem(Colors.red.shade500, 'Xóc mạnh'),
+        _legendItem(_spikeColor, 'Xóc mạnh'),
       ],
     );
   }
@@ -299,9 +493,9 @@ class MotionChart extends StatelessWidget {
         const SizedBox(width: 4.0),
         Text(
           label,
-          style: TextStyle(
+          style: const TextStyle(
             fontSize: 11.0,
-            color: Colors.grey.shade700,
+            color: Colors.white54,
             fontWeight: FontWeight.w500,
           ),
         ),

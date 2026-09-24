@@ -25,6 +25,15 @@ class MotionDetector {
   List<ChartDataPoint> get chartDataPoints =>
       List.unmodifiable(_chartDataPoints);
 
+  // --- Recording ---
+  DateTime? _startTime;
+  DateTime? _recordingStartTime;
+  bool _isRecording = false;
+  bool get isRecording => _isRecording;
+  final List<ChartDataPoint> _recordingBuffer = [];
+  List<ChartDataPoint> get recordingBuffer =>
+      List.unmodifiable(_recordingBuffer);
+
   bool _isMoving = false;
   bool get isMoving => _isMoving;
 
@@ -143,15 +152,38 @@ class MotionDetector {
       requiredPoints: requiredPoints,
     );
 
-    // Lưu data point cho biểu đồ
-    _chartDataPoints.add(ChartDataPoint(
+    // Tính thời gian tương đối
+    _startTime ??= time;
+    final relativeTime = time.difference(_startTime!).inMilliseconds / 1000.0;
+
+    final dataPoint = ChartDataPoint(
       magnitude: magnitude,
       timestamp: time,
+      relativeTime: relativeTime,
       category: category,
       isMoving: _isMoving,
-    ));
+    );
+
+    // Lưu data point cho biểu đồ (rolling window)
+    _chartDataPoints.add(dataPoint);
     if (_chartDataPoints.length > windowSize) {
       _chartDataPoints.removeAt(0);
+    }
+
+    // Lưu vào buffer nếu đang ghi (tính thời gian tương đối từ lúc bắt đầu ghi)
+    if (_isRecording) {
+      _recordingStartTime ??= time;
+      final sessionRelativeTime =
+          time.difference(_recordingStartTime!).inMilliseconds / 1000.0;
+      _recordingBuffer.add(
+        ChartDataPoint(
+          magnitude: magnitude,
+          timestamp: time,
+          relativeTime: sessionRelativeTime,
+          category: category,
+          isMoving: _isMoving,
+        ),
+      );
     }
 
     _emitLog(entry);
@@ -215,13 +247,33 @@ class MotionDetector {
     return '[$timeStr] [SUMMARY] Avg: ${avg.toStringAsFixed(2)} (Min: ${min.toStringAsFixed(2)}, Max: ${max.toStringAsFixed(2)}) | Window: [${entry.motionCount}/$requiredPoints | ${entry.stillCount}/$requiredPoints] | State: $stateStr';
   }
 
+  /// Bắt đầu ghi lịch sử
+  void startRecording() {
+    _isRecording = true;
+    _recordingStartTime = null;
+    _recordingBuffer.clear();
+  }
+
+  /// Dừng ghi và trả về toàn bộ dữ liệu đã ghi
+  List<ChartDataPoint> stopRecording() {
+    _isRecording = false;
+    _recordingStartTime = null;
+    final result = List<ChartDataPoint>.from(_recordingBuffer);
+    _recordingBuffer.clear();
+    return result;
+  }
+
   void reset() {
     _motionPointsCount = 0;
     _stillPointsCount = 0;
     _isMoving = false;
+    _isRecording = false;
+    _startTime = null;
+    _recordingStartTime = null;
     _recentMagnitudes.clear();
     _magnitudeWindow.clear();
     _chartDataPoints.clear();
+    _recordingBuffer.clear();
     _samplesSinceLastSummary = 0;
     _lastSummaryTime = null;
   }
