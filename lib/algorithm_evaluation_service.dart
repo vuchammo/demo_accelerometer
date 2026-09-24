@@ -24,6 +24,12 @@ class SessionEvaluationResult {
   /// Dự đoán của thuật toán: true = Có di chuyển, false = Không di chuyển
   final bool predictedIsMoving;
 
+  /// Ngưỡng mức vừa được sử dụng (%)
+  final double moderateThresholdPct;
+
+  /// Ngưỡng cao + cực đại được sử dụng (%)
+  final double highAndPeakThresholdPct;
+
   /// Nhãn thực tế (Ground truth): true = Có di chuyển, false = Không di chuyển, null = Chưa xác định
   final bool? groundTruthIsMoving;
 
@@ -41,6 +47,8 @@ class SessionEvaluationResult {
     required this.peakPercentage,
     required this.highAndPeakPercentage,
     required this.predictedIsMoving,
+    this.moderateThresholdPct = 30.0,
+    this.highAndPeakThresholdPct = 5.0,
     required this.groundTruthIsMoving,
     this.groundTruthSource = 'auto_keyword',
   });
@@ -54,18 +62,18 @@ class SessionEvaluationResult {
   /// Thông báo giải thích chi tiết lý do dự đoán
   String get explanation {
     if (predictedIsMoving) {
-      return 'Thỏa mãn: Mức vừa ${moderatePercentage.toStringAsFixed(1)}% (> 30%) và Cao+Cực đại ${highAndPeakPercentage.toStringAsFixed(1)}% (< 5%)';
+      return 'Thỏa mãn: Mức vừa ${moderatePercentage.toStringAsFixed(1)}% (> ${moderateThresholdPct.toStringAsFixed(0)}%) và Cao+Cực đại ${highAndPeakPercentage.toStringAsFixed(1)}% (< ${highAndPeakThresholdPct.toStringAsFixed(0)}%)';
     }
 
     final List<String> reasons = [];
-    if (moderatePercentage <= 30.0) {
+    if (moderatePercentage <= moderateThresholdPct) {
       reasons.add(
-        'Mức vừa chỉ đạt ${moderatePercentage.toStringAsFixed(1)}% (yêu cầu > 30%)',
+        'Mức vừa chỉ đạt ${moderatePercentage.toStringAsFixed(1)}% (yêu cầu > ${moderateThresholdPct.toStringAsFixed(0)}%)',
       );
     }
-    if (highAndPeakPercentage >= 5.0) {
+    if (highAndPeakPercentage >= highAndPeakThresholdPct) {
       reasons.add(
-        'Cao+Cực đại lên tới ${highAndPeakPercentage.toStringAsFixed(1)}% (yêu cầu < 5%)',
+        'Cao+Cực đại lên tới ${highAndPeakPercentage.toStringAsFixed(1)}% (yêu cầu < ${highAndPeakThresholdPct.toStringAsFixed(0)}%)',
       );
     }
 
@@ -88,6 +96,8 @@ class SessionEvaluationResult {
       peakPercentage: peakPercentage,
       highAndPeakPercentage: highAndPeakPercentage,
       predictedIsMoving: predictedIsMoving,
+      moderateThresholdPct: moderateThresholdPct,
+      highAndPeakThresholdPct: highAndPeakThresholdPct,
       groundTruthIsMoving: newGroundTruth,
       groundTruthSource: 'manual',
     );
@@ -115,14 +125,12 @@ class EvaluationReport {
   });
 
   /// Số phiên có nhãn thực tế là Di chuyển
-  int get actualMovingCount => results
-      .where((r) => r.groundTruthIsMoving == true)
-      .length;
+  int get actualMovingCount =>
+      results.where((r) => r.groundTruthIsMoving == true).length;
 
   /// Số phiên có nhãn thực tế là Không di chuyển
-  int get actualStillCount => results
-      .where((r) => r.groundTruthIsMoving == false)
-      .length;
+  int get actualStillCount =>
+      results.where((r) => r.groundTruthIsMoving == false).length;
 
   /// True Positive (Thực tế: Di chuyển & Thuật toán: Di chuyển)
   int get truePositive => results
@@ -254,6 +262,8 @@ class AlgorithmEvaluationService {
     required RecordingSession session,
     required List<ChartDataPoint> points,
     bool? manualGroundTruth,
+    double? customModerateThreshold,
+    double? customHighAndPeakThreshold,
   }) {
     int moderateCount = 0;
     int highCount = 0;
@@ -278,6 +288,8 @@ class AlgorithmEvaluationService {
       highCount: highCount,
       peakCount: peakCount,
       manualGroundTruth: manualGroundTruth,
+      customModerateThreshold: customModerateThreshold,
+      customHighAndPeakThreshold: customHighAndPeakThreshold,
     );
   }
 
@@ -289,6 +301,8 @@ class AlgorithmEvaluationService {
     required int highCount,
     required int peakCount,
     bool? manualGroundTruth,
+    double? customModerateThreshold,
+    double? customHighAndPeakThreshold,
   }) {
     return _buildEvaluationResult(
       session: session,
@@ -297,6 +311,8 @@ class AlgorithmEvaluationService {
       highCount: highCount,
       peakCount: peakCount,
       manualGroundTruth: manualGroundTruth,
+      customModerateThreshold: customModerateThreshold,
+      customHighAndPeakThreshold: customHighAndPeakThreshold,
     );
   }
 
@@ -308,6 +324,8 @@ class AlgorithmEvaluationService {
     required int highCount,
     required int peakCount,
     bool? manualGroundTruth,
+    double? customModerateThreshold,
+    double? customHighAndPeakThreshold,
   }) {
     final double moderatePct;
     final double highPct;
@@ -326,12 +344,17 @@ class AlgorithmEvaluationService {
       highAndPeakPct = 0.0;
     }
 
+    final double effectiveModerateThreshold =
+        customModerateThreshold ?? moderateThresholdPct;
+    final double effectiveHighAndPeakThreshold =
+        customHighAndPeakThreshold ?? highAndPeakThresholdPct;
+
     // THUẬT TOÁN ĐỀ BÀI:
     // Gia tốc mức vừa > 30% VÀ Gia tốc cao + cực đại < 5% => CÓ DI CHUYỂN
     // Ngược lại => KHÔNG DI CHUYỂN
     final bool predictedIsMoving =
-        (moderatePct > moderateThresholdPct) &&
-        (highAndPeakPct < highAndPeakThresholdPct);
+        (moderatePct > effectiveModerateThreshold) &&
+        (highAndPeakPct < effectiveHighAndPeakThreshold);
 
     final bool? groundTruth =
         manualGroundTruth ?? determineGroundTruth(session.label);
@@ -350,6 +373,8 @@ class AlgorithmEvaluationService {
       peakPercentage: peakPct,
       highAndPeakPercentage: highAndPeakPct,
       predictedIsMoving: predictedIsMoving,
+      moderateThresholdPct: effectiveModerateThreshold,
+      highAndPeakThresholdPct: effectiveHighAndPeakThreshold,
       groundTruthIsMoving: groundTruth,
       groundTruthSource: source,
     );

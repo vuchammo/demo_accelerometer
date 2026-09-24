@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'algorithm_evaluation_service.dart';
 import 'database/recording_database.dart';
+import 'database/recording_session.dart';
 import 'recording_detail_screen.dart';
 
 class AlgorithmEvaluationScreen extends StatefulWidget {
@@ -17,6 +18,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
   List<SessionEvaluationResult> _results = [];
   final Map<int, bool?> _manualOverrides = {};
   int _selectedFilterIndex = 0; // 0: Tất cả, 1: Đúng, 2: Sai, 3: Bỏ qua
+
+  bool _isRuleExpanded = false;
+  double _moderateThreshold = 30.0;
+  double _highAndPeakThreshold = 5.0;
+
+  List<RecordingSession> _cachedSessions = [];
+  Map<int, Map<String, int>> _cachedStatsMap = {};
 
   @override
   void initState() {
@@ -34,36 +42,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
       final statsMap = await RecordingDatabase.instance
           .getSessionsMagnitudeDistribution();
 
-      final List<SessionEvaluationResult> list = [];
+      _cachedSessions = sessions;
+      _cachedStatsMap = statsMap;
 
-      for (final session in sessions) {
-        if (session.id == null) continue;
-        final stats = statsMap[session.id!];
-
-        final totalSamples = stats?['total_samples'] ?? session.totalSamples;
-        final moderateCount = stats?['moderate_count'] ?? 0;
-        final highCount = stats?['high_count'] ?? 0;
-        final peakCount = stats?['peak_count'] ?? 0;
-
-        final manualGt = _manualOverrides.containsKey(session.id!)
-            ? _manualOverrides[session.id!]
-            : null;
-
-        final res = AlgorithmEvaluationService.instance.evaluateCountData(
-          session: session,
-          totalSamples: totalSamples,
-          moderateCount: moderateCount,
-          highCount: highCount,
-          peakCount: peakCount,
-          manualGroundTruth: manualGt,
-        );
-
-        list.add(res);
-      }
+      _recomputeResults();
 
       if (mounted) {
         setState(() {
-          _results = list;
           _isLoading = false;
         });
       }
@@ -77,6 +62,47 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
         );
       }
     }
+  }
+
+  List<SessionEvaluationResult> _computeResultsForThresholds(
+    double moderateThreshold,
+    double highThreshold,
+  ) {
+    final List<SessionEvaluationResult> list = [];
+    for (final session in _cachedSessions) {
+      if (session.id == null) continue;
+      final stats = _cachedStatsMap[session.id!];
+
+      final totalSamples = stats?['total_samples'] ?? session.totalSamples;
+      final moderateCount = stats?['moderate_count'] ?? 0;
+      final highCount = stats?['high_count'] ?? 0;
+      final peakCount = stats?['peak_count'] ?? 0;
+
+      final manualGt = _manualOverrides.containsKey(session.id!)
+          ? _manualOverrides[session.id!]
+          : null;
+
+      final res = AlgorithmEvaluationService.instance.evaluateCountData(
+        session: session,
+        totalSamples: totalSamples,
+        moderateCount: moderateCount,
+        highCount: highCount,
+        peakCount: peakCount,
+        manualGroundTruth: manualGt,
+        customModerateThreshold: moderateThreshold,
+        customHighAndPeakThreshold: highThreshold,
+      );
+
+      list.add(res);
+    }
+    return list;
+  }
+
+  void _recomputeResults() {
+    _results = _computeResultsForThresholds(
+      _moderateThreshold,
+      _highAndPeakThreshold,
+    );
   }
 
   void _setManualGroundTruth(int sessionId, bool? value) {
@@ -268,7 +294,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   const SizedBox(height: 12.0),
 
                   // 2. Banner tóm tắt quy tắc
-                  _buildRuleSummaryBanner(),
+                  _buildRuleSummaryBanner(report),
 
                   const SizedBox(height: 14.0),
 
@@ -505,41 +531,907 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     );
   }
 
-  /// Banner tóm tắt quy tắc điều kiện di chuyển
-  Widget _buildRuleSummaryBanner() {
+  /// Khung hiển thị thông minh mô tả điều kiện di chuyển (Interactive Condition Card)
+  Widget _buildRuleSummaryBanner(EvaluationReport report) {
+    final isCustomThreshold =
+        _moderateThreshold != 30.0 || _highAndPeakThreshold != 5.0;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14.0),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border.all(
+          color: isCustomThreshold
+              ? Colors.indigo.shade300
+              : Colors.grey.shade200,
+          width: isCustomThreshold ? 1.5 : 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isCustomThreshold
+                ? Colors.indigo.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10.0,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Header Bar: Tiêu đề + Nút thử nghiệm ngưỡng + Nút mở rộng
+          InkWell(
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(16.0),
+              bottom: _isRuleExpanded
+                  ? Radius.zero
+                  : const Radius.circular(16.0),
+            ),
+            onTap: () {
+              setState(() {
+                _isRuleExpanded = !_isRuleExpanded;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14.0, 12.0, 10.0, 10.0),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(7.0),
+                    decoration: BoxDecoration(
+                      color: isCustomThreshold
+                          ? Colors.indigo.shade50
+                          : Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(10.0),
+                    ),
+                    child: Icon(
+                      Icons.tune_rounded,
+                      size: 16.0,
+                      color: isCustomThreshold
+                          ? Colors.indigo.shade700
+                          : Colors.blue.shade700,
+                    ),
+                  ),
+                  const SizedBox(width: 10.0),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Flexible(
+                              child: Text(
+                                'TIÊU CHÍ PHÁN ĐOÁN DI CHUYỂN',
+                                style: TextStyle(
+                                  fontSize: 12.0,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.4,
+                                  color: Color(0xFF1E2235),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (isCustomThreshold) ...[
+                              const SizedBox(width: 6.0),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6.0,
+                                  vertical: 1.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  borderRadius: BorderRadius.circular(6.0),
+                                ),
+                                child: Text(
+                                  'Tùy chỉnh',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.amber.shade900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2.0),
+                        Text(
+                          _isRuleExpanded
+                              ? 'Chạm để thu gọn chi tiết'
+                              : 'Chạm để xem bảng dải gia tốc & công thức',
+                          style: TextStyle(
+                            fontSize: 11.0,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Nút mở BottomSheet thử nghiệm ngưỡng
+                  IconButton(
+                    icon: Icon(
+                      Icons.tune,
+                      size: 18.0,
+                      color: isCustomThreshold
+                          ? Colors.indigo.shade700
+                          : Colors.grey.shade600,
+                    ),
+                    tooltip: 'Thử nghiệm ngưỡng',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _showThresholdTuningSheet(report),
+                  ),
+                  Icon(
+                    _isRuleExpanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    size: 20.0,
+                    color: Colors.grey.shade500,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 2. Hai thẻ điều kiện trực quan (Dạng 2 dòng)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14.0, 4.0, 14.0, 12.0),
+            child: Column(
+              children: [
+                // Dòng 1: Gia tốc mức vừa
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12.0,
+                    vertical: 9.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0FDFA), // Teal 50
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: const Color(0xFF99F6E4), // Teal 200
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6.0),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFCCFBF1),
+                          borderRadius: BorderRadius.circular(8.0),
+                        ),
+                        child: const Icon(
+                          Icons.speed_rounded,
+                          size: 15.0,
+                          color: Color(0xFF0F766E), // Teal 700
+                        ),
+                      ),
+                      const SizedBox(width: 10.0),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Gia tốc mức vừa',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF0F766E),
+                              ),
+                            ),
+                            SizedBox(height: 1.0),
+                            Text(
+                              'Dải chuyển động: 1.0 – 4.0 m/s²',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF115E59),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9.0,
+                          vertical: 4.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8.0),
+                          border: Border.all(color: const Color(0xFF5EEAD4)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'Yêu cầu ',
+                              style: TextStyle(
+                                fontSize: 11.0,
+                                color: Color(0xFF134E4A),
+                              ),
+                            ),
+                            Text(
+                              '> ${_moderateThreshold.toStringAsFixed(0)}%',
+                              style: const TextStyle(
+                                fontSize: 13.0,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF0F766E),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Đường liên kết ở giữa với chip VÀ (AND)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          height: 1.0,
+                          color: Colors.grey.shade200,
+                        ),
+                      ),
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 10.0),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E2235),
+                          borderRadius: BorderRadius.circular(6.0),
+                        ),
+                        child: const Text(
+                          'VÀ',
+                          style: TextStyle(
+                            fontSize: 10.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          height: 1.0,
+                          color: Colors.grey.shade200,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Dòng 2: Gia tốc cao & cực đại
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12.0,
+                    vertical: 9.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED), // Orange 50
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: const Color(0xFFFED7AA), // Orange 200
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6.0),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFEDD5),
+                          borderRadius: BorderRadius.circular(8.0),
+                        ),
+                        child: const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 15.0,
+                          color: Color(0xFFC2410C), // Orange 700
+                        ),
+                      ),
+                      const SizedBox(width: 10.0),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Gia tốc cao & cực đại',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFC2410C),
+                              ),
+                            ),
+                            SizedBox(height: 1.0),
+                            Text(
+                              'Dải va đập, xóc: ≥ 4.0 m/s²',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF9A3412),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9.0,
+                          vertical: 4.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8.0),
+                          border: Border.all(color: const Color(0xFFFDBA74)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'Yêu cầu ',
+                              style: TextStyle(
+                                fontSize: 11.0,
+                                color: Color(0xFF7C2D12),
+                              ),
+                            ),
+                            Text(
+                              '< ${_highAndPeakThreshold.toStringAsFixed(0)}%',
+                              style: const TextStyle(
+                                fontSize: 13.0,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFFC2410C),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 3. Dòng kết luận trực quan
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14.0,
+              vertical: 7.0,
+            ),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.vertical(
+                bottom: _isRuleExpanded
+                    ? Radius.zero
+                    : const Radius.circular(16.0),
+              ),
+              border: Border(
+                top: BorderSide(color: Colors.grey.shade200, width: 0.8),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.arrow_right_alt_rounded,
+                  size: 16.0,
+                  color: Colors.black54,
+                ),
+                const SizedBox(width: 4.0),
+                const Text(
+                  'Thỏa mãn: ',
+                  style: TextStyle(fontSize: 11.0, color: Colors.black54),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6.0,
+                    vertical: 1.5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6.0),
+                  ),
+                  child: const Text(
+                    'CÓ DI CHUYỂN',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF047857),
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                const Text(
+                  'Còn lại: ',
+                  style: TextStyle(fontSize: 11.0, color: Colors.black54),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6.0,
+                    vertical: 1.5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade200,
+                    borderRadius: BorderRadius.circular(6.0),
+                  ),
+                  child: Text(
+                    'KHÔNG DI CHUYỂN',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 4. Khối Mở rộng chi tiết (Khi _isRuleExpanded == true)
+          if (_isRuleExpanded)
+            Container(
+              padding: const EdgeInsets.all(14.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(16.0),
+                ),
+                border: Border(
+                  top: BorderSide(color: Colors.grey.shade200, width: 0.8),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'BẢNG PHÂN LOẠI DẢI GIA TỐC (m/s²):',
+                    style: TextStyle(
+                      fontSize: 11.0,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.4,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  const SizedBox(height: 8.0),
+                  _buildRangeTableRow(
+                    range: '< 1.0 m/s²',
+                    name: 'Tĩnh',
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(height: 6.0),
+                  _buildRangeTableRow(
+                    range: '1.0 – 4.0 m/s²',
+                    name: 'Gia tốc mức vừa',
+                    color: const Color(0xFF0F766E),
+                    isHighlighted: true,
+                  ),
+                  const SizedBox(height: 6.0),
+                  _buildRangeTableRow(
+                    range: '4.0 – 8.0 m/s²',
+                    name: 'Gia tốc cao',
+                    color: const Color(0xFFC2410C),
+                  ),
+                  const SizedBox(height: 6.0),
+                  _buildRangeTableRow(
+                    range: '> 8.0 m/s²',
+                    name: 'Gia tốc cực đại',
+                    color: const Color(0xFFB91C1C),
+                    isHighlighted: true,
+                  ),
+                  const SizedBox(height: 12.0),
+                  // Nút mở bộ tinh chỉnh
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10.0),
+                        ),
+                      ),
+                      icon: const Icon(Icons.tune_rounded, size: 16.0),
+                      label: const Text(
+                        'Thử nghiệm thay đổi ngưỡng thuật toán',
+                        style: TextStyle(fontSize: 12.0),
+                      ),
+                      onPressed: () => _showThresholdTuningSheet(report),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRangeTableRow({
+    required String range,
+    required String name,
+    required Color color,
+    bool isHighlighted = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 5.0),
+      decoration: BoxDecoration(
+        color: isHighlighted
+            ? color.withValues(alpha: 0.08)
+            : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8.0),
+        border: Border.all(
+          color: isHighlighted
+              ? color.withValues(alpha: 0.3)
+              : Colors.grey.shade200,
+          width: 0.8,
+        ),
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(6.0),
+            padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
             decoration: BoxDecoration(
-              color: Colors.blue.shade50,
-              shape: BoxShape.circle,
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(5.0),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
             ),
-            child: Icon(
-              Icons.tune_rounded,
-              size: 16.0,
-              color: Colors.blue.shade700,
+            child: Text(
+              range,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
             ),
           ),
-          const SizedBox(width: 10.0),
+          const SizedBox(width: 8.0),
           Expanded(
             child: Text(
-              'Điều kiện di chuyển: Gia tốc vừa > 30% và Gia tốc cao + cực đại < 5%',
+              name,
               style: TextStyle(
-                fontSize: 12.0,
-                color: Colors.grey.shade700,
-                fontWeight: FontWeight.w500,
+                fontSize: 11.5,
+                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.w600,
+                color: isHighlighted ? color : Colors.black87,
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showThresholdTuningSheet(EvaluationReport currentReport) {
+    double tempModerate = _moderateThreshold;
+    double tempHigh = _highAndPeakThreshold;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final previewResults = _computeResultsForThresholds(
+            tempModerate,
+            tempHigh,
+          );
+          final previewReport = AlgorithmEvaluationService.instance
+              .generateReport(previewResults);
+          final isModified = tempModerate != 30.0 || tempHigh != 5.0;
+
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24.0)),
+            ),
+            padding: EdgeInsets.fromLTRB(
+              20.0,
+              16.0,
+              20.0,
+              MediaQuery.of(context).viewInsets.bottom + 24.0,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16.0),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8.0),
+                        decoration: BoxDecoration(
+                          color: Colors.indigo.shade50,
+                          borderRadius: BorderRadius.circular(10.0),
+                        ),
+                        child: Icon(
+                          Icons.tune_rounded,
+                          color: Colors.indigo.shade700,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 10.0),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Thử Nghiệm Ngưỡng Thuật Toán',
+                              style: TextStyle(
+                                fontSize: 16.0,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              'Kéo thanh trượt để kiểm tra độ chính xác',
+                              style: TextStyle(
+                                fontSize: 12.0,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (isModified)
+                        TextButton(
+                          onPressed: () {
+                            setSheetState(() {
+                              tempModerate = 30.0;
+                              tempHigh = 5.0;
+                            });
+                          },
+                          child: const Text(
+                            'Mặc định',
+                            style: TextStyle(fontSize: 12.5),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16.0),
+
+                  // Preview Card: Độ chính xác theo ngưỡng mới
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 12.0,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1E2235), Color(0xFF2E3856)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(14.0),
+                    ),
+                    child: Row(
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'ĐỘ CHÍNH XÁC MỚI',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.6,
+                                color: Colors.white.withValues(alpha: 0.7),
+                              ),
+                            ),
+                            const SizedBox(height: 2.0),
+                            Text(
+                              '${previewReport.accuracyPercentage.toStringAsFixed(1)}%',
+                              style: const TextStyle(
+                                fontSize: 24.0,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF00E5FF),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Spacer(),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '${previewReport.correctCount}/${previewReport.evaluatedCount} phiên đúng',
+                              style: const TextStyle(
+                                fontSize: 13.0,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 2.0),
+                            Text(
+                              previewReport.accuracyPercentage >
+                                      currentReport.accuracyPercentage
+                                  ? '▲ Tăng ${(previewReport.accuracyPercentage - currentReport.accuracyPercentage).toStringAsFixed(1)}%'
+                                  : previewReport.accuracyPercentage <
+                                        currentReport.accuracyPercentage
+                                  ? '▼ Giảm ${(currentReport.accuracyPercentage - previewReport.accuracyPercentage).toStringAsFixed(1)}%'
+                                  : 'Không đổi',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    previewReport.accuracyPercentage >
+                                        currentReport.accuracyPercentage
+                                    ? const Color(0xFF10B981)
+                                    : previewReport.accuracyPercentage <
+                                          currentReport.accuracyPercentage
+                                    ? const Color(0xFFEF4444)
+                                    : Colors.white60,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 18.0),
+
+                  // Slider 1: Ngưỡng Gia tốc mức vừa
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.speed_rounded,
+                            size: 16.0,
+                            color: Colors.teal.shade700,
+                          ),
+                          const SizedBox(width: 6.0),
+                          const Text(
+                            'Gia tốc mức vừa (1.0–4.0 m/s²)',
+                            style: TextStyle(
+                              fontSize: 13.0,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.shade50,
+                          borderRadius: BorderRadius.circular(6.0),
+                          border: Border.all(color: Colors.teal.shade200),
+                        ),
+                        child: Text(
+                          '> ${tempModerate.toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: 13.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.teal.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: tempModerate,
+                    min: 10.0,
+                    max: 60.0,
+                    divisions: 10,
+                    activeColor: const Color(0xFF0F766E),
+                    inactiveColor: Colors.teal.shade100,
+                    onChanged: (val) {
+                      setSheetState(() {
+                        tempModerate = val;
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 10.0),
+
+                  // Slider 2: Ngưỡng Gia tốc cao + cực đại
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 16.0,
+                            color: Colors.deepOrange.shade700,
+                          ),
+                          const SizedBox(width: 6.0),
+                          const Text(
+                            'Gia tốc cao & cực đại (≥ 4.0 m/s²)',
+                            style: TextStyle(
+                              fontSize: 13.0,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.deepOrange.shade50,
+                          borderRadius: BorderRadius.circular(6.0),
+                          border: Border.all(color: Colors.deepOrange.shade200),
+                        ),
+                        child: Text(
+                          '< ${tempHigh.toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: 13.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.deepOrange.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: tempHigh,
+                    min: 1.0,
+                    max: 20.0,
+                    divisions: 19,
+                    activeColor: const Color(0xFFC2410C),
+                    inactiveColor: Colors.deepOrange.shade100,
+                    onChanged: (val) {
+                      setSheetState(() {
+                        tempHigh = val;
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 16.0),
+
+                  // Nút Áp dụng
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text('Đóng'),
+                        ),
+                      ),
+                      const SizedBox(width: 12.0),
+                      Expanded(
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1E2235),
+                          ),
+                          icon: const Icon(Icons.check_rounded, size: 18.0),
+                          label: const Text('Áp dụng ngưỡng'),
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            setState(() {
+                              _moderateThreshold = tempModerate;
+                              _highAndPeakThreshold = tempHigh;
+                              _recomputeResults();
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -720,15 +1612,20 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   _buildMetricRow(
                     label: 'Gia tốc vừa (1.0–4.0 m/s²)',
                     percentage: result.moderatePercentage,
-                    thresholdText: 'Yêu cầu > 30%',
-                    isPassed: result.moderatePercentage > 30.0,
+                    thresholdText:
+                        'Yêu cầu > ${result.moderateThresholdPct.toStringAsFixed(0)}%',
+                    isPassed:
+                        result.moderatePercentage > result.moderateThresholdPct,
                   ),
                   const SizedBox(height: 8.0),
                   _buildMetricRow(
                     label: 'Gia tốc cao & cực đại (≥ 4.0 m/s²)',
                     percentage: result.highAndPeakPercentage,
-                    thresholdText: 'Yêu cầu < 5%',
-                    isPassed: result.highAndPeakPercentage < 5.0,
+                    thresholdText:
+                        'Yêu cầu < ${result.highAndPeakThresholdPct.toStringAsFixed(0)}%',
+                    isPassed:
+                        result.highAndPeakPercentage <
+                        result.highAndPeakThresholdPct,
                   ),
                 ],
               ),
