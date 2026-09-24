@@ -97,6 +97,19 @@ class NotificationService {
 
     await androidImplementation.createNotificationChannel(movingChannel);
     await androidImplementation.createNotificationChannel(stoppedChannel);
+
+    // 3. Channel cho sự kiện ghi dữ liệu (bắt đầu / dừng ghi)
+    const AndroidNotificationChannel recordingChannel =
+        AndroidNotificationChannel(
+          'motion_channel_recording_v1',
+          'Phiên ghi dữ liệu',
+          description:
+              'Thông báo khi bắt đầu hoặc dừng ghi dữ liệu chuyển động',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+        );
+    await androidImplementation.createNotificationChannel(recordingChannel);
   }
 
   /// Bắn thông báo tương ứng với trạng thái di chuyển / không di chuyển
@@ -148,5 +161,92 @@ class NotificationService {
     } catch (e) {
       // Bỏ qua hoặc ghi log nếu có lỗi
     }
+  }
+
+  /// Thông báo khi bắt đầu phiên ghi (sau khi đếm ngược kết thúc)
+  Future<void> showRecordingStartedNotification() async {
+    const int notificationId = 1002;
+    const String title = 'Bắt đầu ghi';
+    const String body = 'Đang bắt đầu ghi dữ liệu cảm biến.';
+
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'motion_channel_recording_v1',
+          'Phiên ghi dữ liệu',
+          channelDescription:
+              'Thông báo khi bắt đầu hoặc dừng ghi dữ liệu chuyển động',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          onlyAlertOnce: false,
+        );
+
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    try {
+      await _plugin.cancel(id: notificationId);
+      await _plugin.show(
+        id: notificationId,
+        title: title,
+        body: body,
+        notificationDetails: notificationDetails,
+      );
+    } catch (_) {}
+  }
+
+  /// Thông báo khi dừng và lưu phiên ghi
+  Future<void> showRecordingStoppedNotification({
+    required int totalSamples,
+    required Duration duration,
+  }) async {
+    const int notificationId = 1003;
+    const String title = 'Đã dừng ghi';
+    final durationSec = (duration.inMilliseconds / 1000).toStringAsFixed(1);
+    final String body =
+        'Đã lưu $totalSamples mẫu ($durationSec giây) vào lịch sử.';
+
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+          'motion_channel_recording_v1',
+          'Phiên ghi dữ liệu',
+          channelDescription:
+              'Thông báo khi bắt đầu hoặc dừng ghi dữ liệu chuyển động',
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          enableVibration: true,
+          onlyAlertOnce: false,
+        );
+
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+
+    try {
+      await _plugin.cancel(id: notificationId);
+      await _plugin.show(
+        id: notificationId,
+        title: title,
+        body: body,
+        notificationDetails: notificationDetails,
+      );
+    } catch (_) {}
   }
 }
