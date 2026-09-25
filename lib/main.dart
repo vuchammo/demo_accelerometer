@@ -6,11 +6,11 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import 'algorithm_evaluation_service.dart';
 import 'database/recording_database.dart';
 import 'database/recording_session.dart';
 import 'foreground_service_manager.dart';
 import 'motion_chart_widget.dart';
-import 'motion_log_models.dart';
 import 'notification_service.dart';
 import 'recording_history_screen.dart';
 import 'web_server/web_share_sheet.dart';
@@ -285,10 +285,22 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     final totalSamples = points.length;
     final sumMag = points.fold<double>(0.0, (sum, p) => sum + p.magnitude);
     final avgMag = sumMag / totalSamples;
-    final motionCount = points
-        .where((p) => p.category == MotionSampleCategory.motion)
-        .length;
-    final motionPercentage = (motionCount / totalSamples) * 100.0;
+
+    // Chạy thuật toán dự đoán phiên CV v2 (classifySession)
+    final List<double> tSeconds = [];
+    final List<double> magnitudes = [];
+    for (final p in points) {
+      tSeconds.add(p.relativeTime);
+      magnitudes.add(p.magnitude);
+    }
+    final sessionResult = MotionDetector.classifySession(
+      tSeconds,
+      magnitudes,
+      config: _detector.config,
+    );
+
+    final votePercentage = sessionResult.ratio * 100.0;
+    final isPredictedMoving = sessionResult.isMoving;
 
     final tagText = _tagController.text.trim();
     final session = RecordingSession(
@@ -297,7 +309,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
       durationMs: durationMs,
       totalSamples: totalSamples,
       avgMagnitude: avgMag,
-      motionPercentage: motionPercentage,
+      motionPercentage: votePercentage,
       label: tagText.isNotEmpty ? tagText : null,
     );
 
@@ -308,23 +320,77 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
         _loadSavedTags();
       }
 
-      // Phát thông báo khi đã dừng và lưu phiên
+      final predictionTitle =
+          isPredictedMoving ? 'Có di chuyển' : 'Không di chuyển';
+
+      // Phát thông báo khi đã dừng và lưu phiên kèm kết luận dự đoán
       await NotificationService.instance.showRecordingStoppedNotification(
         totalSamples: totalSamples,
         duration: duration,
+        predictionSummary:
+            '$predictionTitle (${votePercentage.toStringAsFixed(0)}% cửa sổ)',
       );
 
       if (mounted) {
         setState(() {
           _isSaving = false;
         });
+
+        final groundTruth = tagText.isNotEmpty
+            ? AlgorithmEvaluationService.instance.determineGroundTruth(tagText)
+            : null;
+        final bool? isPredictionCorrect =
+            groundTruth != null ? (isPredictedMoving == groundTruth) : null;
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Đã lưu phiên${tagText.isNotEmpty ? ' [#$tagText]' : ''}: $totalSamples mẫu (${(durationMs / 1000).toStringAsFixed(1)}s)',
+            duration: const Duration(seconds: 4),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Đã lưu phiên${tagText.isNotEmpty ? ' [#$tagText]' : ''}: $totalSamples mẫu (${(durationMs / 1000).toStringAsFixed(1)}s)',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13.5,
+                  ),
+                ),
+                const SizedBox(height: 4.0),
+                Row(
+                  children: [
+                    Icon(
+                      isPredictedMoving
+                          ? Icons.directions_walk_rounded
+                          : Icons.pan_tool_rounded,
+                      size: 14.0,
+                      color: isPredictedMoving
+                          ? Colors.tealAccent
+                          : Colors.orangeAccent,
+                    ),
+                    const SizedBox(width: 4.0),
+                    Expanded(
+                      child: Text(
+                        'Dự đoán: ${isPredictedMoving ? "CÓ DI CHUYỂN" : "KHÔNG DI CHUYỂN"} '
+                        '(${votePercentage.toStringAsFixed(1)}% • ${sessionResult.movingVotes}/${sessionResult.totalWindows} cửa sổ)'
+                        '${isPredictionCorrect != null ? (isPredictionCorrect ? ' • ✓ Khớp nhãn' : ' • ✗ Khác nhãn') : ''}',
+                        style: TextStyle(
+                          fontSize: 12.0,
+                          color: isPredictedMoving
+                              ? Colors.tealAccent
+                              : Colors.orangeAccent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
             action: SnackBarAction(
               label: 'Xem lịch sử',
+              textColor: Colors.white,
               onPressed: () async {
                 await Navigator.of(context).push(
                   MaterialPageRoute(
@@ -399,10 +465,12 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
       backgroundColor = const Color(0xFF334155);
       shadowColor = const Color(0xFF334155).withValues(alpha: 0.35);
     } else {
-      backgroundColor = isMoving ? Colors.green.shade600 : Colors.red.shade600;
-      shadowColor = (isMoving ? Colors.green : Colors.red).withValues(
-        alpha: 0.35,
-      );
+      backgroundColor = isMoving
+          ? const Color(0xFF0F766E)
+          : const Color(0xFF334155);
+      shadowColor =
+          (isMoving ? const Color(0xFF0F766E) : const Color(0xFF334155))
+              .withValues(alpha: 0.35);
     }
 
     return Scaffold(
@@ -555,27 +623,57 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                               ),
                             ),
                           ] else ...[
-                            Text(
-                              isMoving ? 'Có chuyển động' : 'Không chuyển động',
-                              style: const TextStyle(
-                                fontSize: 24.0,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: 0.5,
-                              ),
-                              textAlign: TextAlign.center,
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  isMoving
+                                      ? Icons.directions_walk_rounded
+                                      : Icons.pan_tool_rounded,
+                                  color: isMoving
+                                      ? const Color(0xFF2DD4BF)
+                                      : Colors.blueGrey.shade100,
+                                  size: 26.0,
+                                ),
+                                const SizedBox(width: 8.0),
+                                Text(
+                                  isMoving
+                                      ? 'CÓ DI CHUYỂN'
+                                      : 'KHÔNG DI CHUYỂN',
+                                  style: const TextStyle(
+                                    fontSize: 22.0,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    letterSpacing: 0.8,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 8.0),
+                            const SizedBox(height: 6.0),
                             Text(
                               _formatDuration(currentDuration),
                               style: const TextStyle(
-                                fontSize: 52.0,
+                                fontSize: 48.0,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
                                 letterSpacing: 1.0,
                                 fontFeatures: [FontFeature.tabularFigures()],
                               ),
                             ),
+                            if (_detector.currentHysteresisRun > 0) ...[
+                              const SizedBox(height: 2.0),
+                              Text(
+                                isMoving
+                                    ? 'Đang xác nhận dừng (${_detector.currentHysteresisRun}/${_detector.config.exitCount})...'
+                                    : 'Đang xác nhận di chuyển (${_detector.currentHysteresisRun}/${_detector.config.enterCount})...',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
                           ],
                         ],
                       ),
@@ -654,17 +752,18 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                                 dataPoints: _detector.chartDataPoints,
                                 thresholdMin: _detector.thresholdMin,
                                 thresholdMax: _detector.thresholdMax,
+                                showThresholds: false,
                               ),
                             )
                           : const SizedBox.shrink(),
                     ),
                     const SizedBox(height: 14.0),
-                    // Toggle danh sách magnitude
+                    // Toggle thông số thuật toán CV v2
                     Container(
                       margin: const EdgeInsets.symmetric(horizontal: 20.0),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16.0,
-                        vertical: 4.0,
+                        vertical: 6.0,
                       ),
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -681,28 +780,40 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                       child: Row(
                         children: [
                           Icon(
-                            Icons.list_alt_rounded,
+                            Icons.tune_rounded,
                             color: _showMagnitudeList
-                                ? Colors.blue.shade600
+                                ? const Color(0xFF0F766E)
                                 : Colors.grey.shade400,
                             size: 22.0,
                           ),
                           const SizedBox(width: 10.0),
                           Expanded(
-                            child: Text(
-                              '10 mẫu gần nhất',
-                              style: TextStyle(
-                                fontSize: 14.0,
-                                fontWeight: FontWeight.w600,
-                                color: _showMagnitudeList
-                                    ? Colors.black87
-                                    : Colors.grey.shade600,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Thông số thuật toán CV (v2)',
+                                  style: TextStyle(
+                                    fontSize: 14.0,
+                                    fontWeight: FontWeight.w600,
+                                    color: _showMagnitudeList
+                                        ? Colors.black87
+                                        : Colors.grey.shade600,
+                                  ),
+                                ),
+                                Text(
+                                  'Hệ số biến thiên & năng lượng đường bao',
+                                  style: TextStyle(
+                                    fontSize: 11.0,
+                                    color: Colors.grey.shade500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           Switch(
                             value: _showMagnitudeList,
-                            activeThumbColor: Colors.blue.shade600,
+                            activeThumbColor: const Color(0xFF0F766E),
                             onChanged: (value) {
                               setState(() {
                                 _showMagnitudeList = value;
@@ -712,237 +823,14 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                         ],
                       ),
                     ),
-                    // Danh sách magnitude (ẩn/hiện)
+                    // Bảng chi tiết thông số thuật toán (ẩn/hiện)
                     AnimatedSize(
                       duration: const Duration(milliseconds: 300),
                       curve: Curves.easeInOut,
                       child: _showMagnitudeList
                           ? Padding(
                               padding: const EdgeInsets.only(top: 14.0),
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(
-                                  horizontal: 20.0,
-                                ),
-                                padding: const EdgeInsets.all(16.0),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(20.0),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(
-                                        alpha: 0.05,
-                                      ),
-                                      blurRadius: 16.0,
-                                      offset: const Offset(0, 4),
-                                    ),
-                                  ],
-                                  border: Border.all(
-                                    color: Colors.grey.shade200,
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        const Text(
-                                          '10 mẫu gần nhất',
-                                          style: TextStyle(
-                                            fontSize: 15.0,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black87,
-                                          ),
-                                        ),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8.0,
-                                            vertical: 4.0,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey.shade100,
-                                            borderRadius: BorderRadius.circular(
-                                              8.0,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            'Ngưỡng: ${_detector.thresholdMin} - ${_detector.thresholdMax}',
-                                            style: TextStyle(
-                                              fontSize: 12.0,
-                                              color: Colors.grey.shade700,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12.0),
-                                    Column(
-                                      children: List.generate(10, (index) {
-                                        final hasData =
-                                            index <
-                                            _detector.recentMagnitudes.length;
-                                        final mag = hasData
-                                            ? _detector.recentMagnitudes[index]
-                                            : null;
-                                        final isNewest = index == 0 && hasData;
-                                        final inMotion =
-                                            hasData &&
-                                            mag! >= _detector.thresholdMin &&
-                                            mag <= _detector.thresholdMax;
-
-                                        return Container(
-                                          height: 32.0,
-                                          margin: const EdgeInsets.only(
-                                            bottom: 5.0,
-                                          ),
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 12.0,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: !hasData
-                                                ? Colors.grey.shade50
-                                                : (inMotion
-                                                      ? Colors.green.shade50
-                                                      : Colors.grey.shade50),
-                                            borderRadius: BorderRadius.circular(
-                                              8.0,
-                                            ),
-                                            border: Border.all(
-                                              color: !hasData
-                                                  ? Colors.grey.shade200
-                                                  : (isNewest
-                                                        ? (inMotion
-                                                              ? Colors
-                                                                    .green
-                                                                    .shade700
-                                                              : Colors
-                                                                    .blue
-                                                                    .shade600)
-                                                        : (inMotion
-                                                              ? Colors
-                                                                    .green
-                                                                    .shade300
-                                                              : Colors
-                                                                    .grey
-                                                                    .shade300)),
-                                              width: isNewest ? 1.5 : 1.0,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  SizedBox(
-                                                    width: 44.0,
-                                                    child: isNewest
-                                                        ? Container(
-                                                            padding:
-                                                                const EdgeInsets.symmetric(
-                                                                  horizontal:
-                                                                      4.0,
-                                                                  vertical: 1.5,
-                                                                ),
-                                                            decoration: BoxDecoration(
-                                                              color: inMotion
-                                                                  ? Colors
-                                                                        .green
-                                                                        .shade600
-                                                                  : Colors
-                                                                        .blue
-                                                                        .shade600,
-                                                              borderRadius:
-                                                                  BorderRadius.circular(
-                                                                    4.0,
-                                                                  ),
-                                                            ),
-                                                            child: const Text(
-                                                              'MỚI',
-                                                              textAlign:
-                                                                  TextAlign
-                                                                      .center,
-                                                              style: TextStyle(
-                                                                fontSize: 9.0,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .bold,
-                                                                color: Colors
-                                                                    .white,
-                                                              ),
-                                                            ),
-                                                          )
-                                                        : Text(
-                                                            '#${index + 1}',
-                                                            style: TextStyle(
-                                                              fontSize: 12.0,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w600,
-                                                              color: hasData
-                                                                  ? Colors
-                                                                        .grey
-                                                                        .shade600
-                                                                  : Colors
-                                                                        .grey
-                                                                        .shade400,
-                                                            ),
-                                                          ),
-                                                  ),
-                                                  SizedBox(width: 5.0),
-                                                  Text(
-                                                    hasData
-                                                        ? 'Mẫu ${index + 1}'
-                                                        : 'Đang chờ mẫu...',
-                                                    style: TextStyle(
-                                                      fontSize: 12.5,
-                                                      fontWeight: isNewest
-                                                          ? FontWeight.bold
-                                                          : FontWeight.normal,
-                                                      color: hasData
-                                                          ? Colors.grey.shade800
-                                                          : Colors
-                                                                .grey
-                                                                .shade400,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                              SizedBox(
-                                                width: 90.0,
-                                                child: Text(
-                                                  hasData
-                                                      ? '${mag!.toStringAsFixed(2)} m/s²'
-                                                      : '-- m/s²',
-                                                  textAlign: TextAlign.right,
-                                                  style: TextStyle(
-                                                    fontSize: 13.0,
-                                                    fontWeight: FontWeight.w700,
-                                                    fontFeatures: const [
-                                                      FontFeature.tabularFigures(),
-                                                    ],
-                                                    color: !hasData
-                                                        ? Colors.grey.shade400
-                                                        : (inMotion
-                                                              ? Colors
-                                                                    .green
-                                                                    .shade800
-                                                              : Colors
-                                                                    .grey
-                                                                    .shade800),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      }),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                              child: _buildAlgorithmMetricsCard(),
                             )
                           : const SizedBox.shrink(),
                     ),
@@ -952,6 +840,447 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// Thẻ thông số thuật toán phát hiện di chuyển CV (v2)
+  Widget _buildAlgorithmMetricsCard() {
+    final lastWindow = _detector.lastWindow;
+    final isMoving = _detector.isMoving;
+    final config = _detector.config;
+
+    final hasWindow = lastWindow != null;
+    final currentCv = lastWindow?.cv ?? 0.0;
+    final currentMean = lastWindow?.mean ?? 0.0;
+    final currentVote = lastWindow?.vote ?? false;
+
+    final isCvSatisfied = hasWindow && currentCv < config.cvMax;
+    final isMeanSatisfied = hasWindow && currentMean > config.meanMin;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20.0),
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 16.0,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Tiêu đề & Thông tin cửa sổ
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.tune_rounded,
+                    color: const Color(0xFF0F766E),
+                    size: 18.0,
+                  ),
+                  const SizedBox(width: 6.0),
+                  const Text(
+                    'Cửa sổ trượt CV (v2)',
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8.0,
+                  vertical: 3.0,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade50,
+                  borderRadius: BorderRadius.circular(8.0),
+                  border: Border.all(color: Colors.teal.shade200),
+                ),
+                child: Text(
+                  '4.0s (50 mẫu) • Hop 6',
+                  style: TextStyle(
+                    fontSize: 11.0,
+                    color: Colors.teal.shade900,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12.0),
+
+          // 2 Ô chỉ số: CV và Mean
+          Row(
+            children: [
+              // Ô 1: Hệ số biến thiên CV
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10.0),
+                  decoration: BoxDecoration(
+                    color: isCvSatisfied
+                        ? Colors.teal.shade50
+                        : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: isCvSatisfied
+                          ? Colors.teal.shade300
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Hệ số CV',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5.0,
+                              vertical: 1.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isCvSatisfied
+                                  ? Colors.teal.shade100
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(4.0),
+                            ),
+                            child: Text(
+                              isCvSatisfied ? 'Ổn định' : 'Biến động',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: isCvSatisfied
+                                    ? Colors.teal.shade900
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4.0),
+                      Text(
+                        hasWindow ? currentCv.toStringAsFixed(3) : '--',
+                        style: TextStyle(
+                          fontSize: 19.0,
+                          fontWeight: FontWeight.w800,
+                          color: isCvSatisfied
+                              ? Colors.teal.shade900
+                              : Colors.grey.shade800,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Tiêu chuẩn: < ${config.cvMax.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8.0),
+              // Ô 2: Gia tốc trung bình Mean
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10.0),
+                  decoration: BoxDecoration(
+                    color: isMeanSatisfied
+                        ? Colors.teal.shade50
+                        : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: isMeanSatisfied
+                          ? Colors.teal.shade300
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Gia tốc Mean',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5.0,
+                              vertical: 1.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isMeanSatisfied
+                                  ? Colors.teal.shade100
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(4.0),
+                            ),
+                            child: Text(
+                              isMeanSatisfied ? 'Có lực' : 'Nhiễu nền',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: isMeanSatisfied
+                                    ? Colors.teal.shade900
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4.0),
+                      Text(
+                        hasWindow ? '${currentMean.toStringAsFixed(3)} m/s²' : '--',
+                        style: TextStyle(
+                          fontSize: 16.5,
+                          fontWeight: FontWeight.w800,
+                          color: isMeanSatisfied
+                              ? Colors.teal.shade900
+                              : Colors.grey.shade800,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Tiêu chuẩn: > ${config.meanMin.toStringAsFixed(2)} m/s²',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10.0),
+
+          // Phiếu bầu cửa sổ hiện tại (Vote)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+            decoration: BoxDecoration(
+              color: currentVote
+                  ? const Color(0xFFE6FFFA)
+                  : const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(10.0),
+              border: Border.all(
+                color: currentVote
+                    ? Colors.teal.shade200
+                    : Colors.grey.shade300,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  currentVote
+                      ? Icons.check_circle_rounded
+                      : Icons.remove_circle_outline,
+                  size: 16.0,
+                  color: currentVote
+                      ? Colors.teal.shade800
+                      : Colors.blueGrey.shade600,
+                ),
+                const SizedBox(width: 8.0),
+                Expanded(
+                  child: Text(
+                    hasWindow
+                        ? (currentVote
+                            ? 'Phiếu cửa sổ hiện tại: CÓ DI CHUYỂN (Thỏa mãn CV & Mean)'
+                            : 'Phiếu cửa sổ hiện tại: ĐỨNG YÊN (Chưa đủ điều kiện di chuyển)')
+                        : 'Đang thu thập đủ 50 mẫu cửa sổ đầu tiên...',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: currentVote
+                          ? Colors.teal.shade900
+                          : Colors.blueGrey.shade800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8.0),
+
+          // Máy trạng thái Hysteresis
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(8.0),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.history_toggle_off_rounded,
+                  size: 14.0,
+                  color: Colors.grey.shade600,
+                ),
+                const SizedBox(width: 6.0),
+                Expanded(
+                  child: Text(
+                    isMoving
+                        ? 'Chống nhảy trạng thái: Cần ${config.exitCount} cửa sổ đứng yên liên tiếp để dừng (${_detector.currentHysteresisRun}/${config.exitCount})'
+                        : 'Chống nhảy trạng thái: Cần ${config.enterCount} cửa sổ di chuyển liên tiếp để kích hoạt (${_detector.currentHysteresisRun}/${config.enterCount})',
+                    style: TextStyle(
+                      fontSize: 11.0,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12.0),
+
+          // Mẫu tức thời gần nhất (10 mẫu)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '10 mẫu gia tốc gần nhất',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+              Text(
+                'Gia tốc tức thời',
+                style: TextStyle(
+                  fontSize: 11.0,
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6.0),
+          Column(
+            children: List.generate(10, (index) {
+              final hasData = index < _detector.recentMagnitudes.length;
+              final mag = hasData ? _detector.recentMagnitudes[index] : null;
+              final isNewest = index == 0 && hasData;
+
+              return Container(
+                height: 28.0,
+                margin: const EdgeInsets.only(bottom: 4.0),
+                padding: const EdgeInsets.symmetric(horizontal: 10.0),
+                decoration: BoxDecoration(
+                  color: !hasData
+                      ? Colors.grey.shade50
+                      : (isNewest
+                          ? Colors.teal.shade50
+                          : Colors.grey.shade50),
+                  borderRadius: BorderRadius.circular(6.0),
+                  border: Border.all(
+                    color: !hasData
+                        ? Colors.grey.shade200
+                        : (isNewest
+                            ? Colors.teal.shade400
+                            : Colors.grey.shade300),
+                    width: isNewest ? 1.2 : 0.8,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 38.0,
+                          child: isNewest
+                              ? Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 3.0,
+                                    vertical: 1.0,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0F766E),
+                                    borderRadius: BorderRadius.circular(3.0),
+                                  ),
+                                  child: const Text(
+                                    'MỚI',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 8.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : Text(
+                                  '#${index + 1}',
+                                  style: TextStyle(
+                                    fontSize: 11.0,
+                                    color: hasData
+                                        ? Colors.grey.shade600
+                                        : Colors.grey.shade400,
+                                  ),
+                                ),
+                        ),
+                        const SizedBox(width: 4.0),
+                        Text(
+                          hasData ? 'Mẫu ${index + 1}' : 'Chờ mẫu...',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: isNewest
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            color: hasData
+                                ? Colors.grey.shade800
+                                : Colors.grey.shade400,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      hasData ? '${mag!.toStringAsFixed(2)} m/s²' : '-- m/s²',
+                      style: TextStyle(
+                        fontSize: 12.0,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: hasData
+                            ? (isNewest
+                                ? const Color(0xFF0F766E)
+                                : Colors.grey.shade800)
+                            : Colors.grey.shade400,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ),
+        ],
       ),
     );
   }
@@ -1454,6 +1783,64 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                 minHeight: 5.0,
                 backgroundColor: Colors.red.shade100,
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.red.shade700),
+              ),
+            ),
+          ],
+          // Thống kê dự đoán trực tiếp (Live Prediction) của phiên đang ghi
+          if (_detector.recordingTotalWindows > 0) ...[
+            const SizedBox(height: 10.0),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12.0,
+                vertical: 6.0,
+              ),
+              decoration: BoxDecoration(
+                color: _detector.isCurrentRecordingPredictedMoving
+                    ? Colors.teal.shade50
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(12.0),
+                border: Border.all(
+                  color: _detector.isCurrentRecordingPredictedMoving
+                      ? Colors.teal.shade300
+                      : Colors.grey.shade300,
+                  width: 1.0,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _detector.isCurrentRecordingPredictedMoving
+                        ? Icons.directions_walk_rounded
+                        : Icons.pan_tool_rounded,
+                    size: 15.0,
+                    color: _detector.isCurrentRecordingPredictedMoving
+                        ? Colors.teal.shade800
+                        : Colors.grey.shade700,
+                  ),
+                  const SizedBox(width: 6.0),
+                  Text(
+                    'Dự đoán: ${_detector.isCurrentRecordingPredictedMoving ? "CÓ DI CHUYỂN" : "KHÔNG DI CHUYỂN"} '
+                    '(${(_detector.recordingVoteRatio * 100).toStringAsFixed(0)}% • ${_detector.recordingMovingVotes}/${_detector.recordingTotalWindows} cửa sổ)',
+                    style: TextStyle(
+                      fontSize: 12.0,
+                      fontWeight: FontWeight.bold,
+                      color: _detector.isCurrentRecordingPredictedMoving
+                          ? Colors.teal.shade900
+                          : Colors.grey.shade800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 6.0),
+            Text(
+              'Đang tích lũy mẫu cửa sổ đầu tiên (~${(_detector.config.skipSeconds + _detector.config.windowSeconds).toStringAsFixed(1)}s)...',
+              style: TextStyle(
+                fontSize: 11.0,
+                color: Colors.red.shade400,
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],

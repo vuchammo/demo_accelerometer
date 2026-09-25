@@ -130,6 +130,9 @@ class _CvEngine {
   /// Trạng thái hiện tại (sau hysteresis).
   bool get isMoving => _moving;
 
+  /// Số cửa sổ liên tiếp tích lũy trong máy trạng thái hysteresis hiện tại.
+  int get run => _run;
+
   void reset() {
     _buf.clear();
     _t0 = null;
@@ -275,6 +278,28 @@ class MotionDetector {
   MotionWindow? _lastWindow;
   MotionWindow? get lastWindow => _lastWindow;
 
+  /// Số cửa sổ liên tiếp tích lũy trong hysteresis hiện tại
+  int get currentHysteresisRun => _engine.run;
+
+  // --- Real-time Recording Prediction Stats ---
+  int _recordingTotalWindows = 0;
+  int _recordingMovingVotes = 0;
+
+  /// Tổng số cửa sổ của phiên ghi hiện tại (sau skipSeconds)
+  int get recordingTotalWindows => _recordingTotalWindows;
+
+  /// Số cửa sổ bỏ phiếu "di chuyển" của phiên ghi hiện tại
+  int get recordingMovingVotes => _recordingMovingVotes;
+
+  /// Tỉ lệ cửa sổ di chuyển của phiên ghi hiện tại (0..1)
+  double get recordingVoteRatio => _recordingTotalWindows > 0
+      ? _recordingMovingVotes / _recordingTotalWindows
+      : 0.0;
+
+  /// Dự đoán tạm thời của phiên ghi hiện tại (true = CÓ DI CHUYỂN)
+  bool get isCurrentRecordingPredictedMoving =>
+      recordingVoteRatio >= config.sessionRatio;
+
   int _samplesSinceLastSummary = 0;
   DateTime? _lastSummaryTime;
 
@@ -356,6 +381,19 @@ class MotionDetector {
           triggerReason = newMoving
               ? 'CV=${lastCv.toStringAsFixed(3)} < ${config.cvMax}, Mean=${lastMean.toStringAsFixed(3)} > ${config.meanMin} (${config.enterCount} cửa sổ liên tiếp)'
               : 'Không thỏa mãn điều kiện di chuyển (${config.exitCount} cửa sổ liên tiếp)';
+        }
+      }
+
+      // Cập nhật thống kê dự đoán cho phiên ghi hiện tại nếu đang ghi
+      if (_isRecording) {
+        _recordingStartTime ??= time;
+        final sessionRelativeTime =
+            time.difference(_recordingStartTime!).inMilliseconds / 1000.0;
+        if (sessionRelativeTime >= config.skipSeconds) {
+          for (final w in windows) {
+            _recordingTotalWindows++;
+            if (w.vote) _recordingMovingVotes++;
+          }
         }
       }
     }
@@ -475,6 +513,8 @@ class MotionDetector {
   void startRecording() {
     _isRecording = true;
     _recordingStartTime = null;
+    _recordingTotalWindows = 0;
+    _recordingMovingVotes = 0;
     _recordingBuffer.clear();
   }
 
@@ -493,6 +533,8 @@ class MotionDetector {
     _startTime = null;
     _recordingStartTime = null;
     _lastWindow = null;
+    _recordingTotalWindows = 0;
+    _recordingMovingVotes = 0;
     _recentMagnitudes.clear();
     _chartDataPoints.clear();
     _recordingBuffer.clear();

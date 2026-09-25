@@ -117,7 +117,7 @@ class NotificationService {
     final int notificationId = 1001;
 
     final String title = 'Demo';
-    final String body = isMoving ? 'Có chuyển động' : 'Dừng chuyển động';
+    final String body = isMoving ? 'Có di chuyển' : 'Không di chuyển (Đứng yên)';
 
     final AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
@@ -208,12 +208,14 @@ class NotificationService {
   Future<void> showRecordingStoppedNotification({
     required int totalSamples,
     required Duration duration,
+    String? predictionSummary,
   }) async {
     const int notificationId = 1003;
     const String title = 'Đã dừng ghi';
     final durationSec = (duration.inMilliseconds / 1000).toStringAsFixed(1);
-    final String body =
-        'Đã lưu $totalSamples mẫu ($durationSec giây) vào lịch sử.';
+    final String body = predictionSummary != null
+        ? 'Đã lưu $totalSamples mẫu ($durationSec giây). Dự đoán: $predictionSummary'
+        : 'Đã lưu $totalSamples mẫu ($durationSec giây) vào lịch sử.';
 
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(

@@ -5,14 +5,16 @@ import 'chart_data_point.dart';
 
 class MotionChart extends StatefulWidget {
   final List<ChartDataPoint> dataPoints;
-  final double thresholdMin;
-  final double thresholdMax;
+  final double? thresholdMin;
+  final double? thresholdMax;
+  final bool showThresholds;
 
   const MotionChart({
     super.key,
     required this.dataPoints,
-    required this.thresholdMin,
-    required this.thresholdMax,
+    this.thresholdMin,
+    this.thresholdMax,
+    this.showThresholds = false,
   });
 
   @override
@@ -390,44 +392,48 @@ class _MotionChartState extends State<MotionChart> {
         border: Border.all(color: _borderColor),
       ),
       extraLinesData: ExtraLinesData(
-        horizontalLines: [
-          HorizontalLine(
-            y: widget.thresholdMin,
-            color: Colors.amberAccent.withValues(alpha: 0.75),
-            strokeWidth: 1.2,
-            dashArray: [6, 4],
-            label: HorizontalLineLabel(
-              show: true,
-              alignment: Alignment.topRight,
-              padding: const EdgeInsets.only(right: 6, bottom: 2),
-              style: TextStyle(
-                fontSize: 9.5,
-                color: Colors.amberAccent.withValues(alpha: 0.9),
-                fontWeight: FontWeight.bold,
-              ),
-              labelResolver: (_) =>
-                  'Min ${widget.thresholdMin.toStringAsFixed(1)}',
-            ),
-          ),
-          HorizontalLine(
-            y: widget.thresholdMax,
-            color: Colors.redAccent.withValues(alpha: 0.75),
-            strokeWidth: 1.2,
-            dashArray: [6, 4],
-            label: HorizontalLineLabel(
-              show: true,
-              alignment: Alignment.topRight,
-              padding: const EdgeInsets.only(right: 6, bottom: 2),
-              style: TextStyle(
-                fontSize: 9.5,
-                color: Colors.redAccent.withValues(alpha: 0.9),
-                fontWeight: FontWeight.bold,
-              ),
-              labelResolver: (_) =>
-                  'Max ${widget.thresholdMax.toStringAsFixed(1)}',
-            ),
-          ),
-        ],
+        horizontalLines: (widget.showThresholds &&
+                widget.thresholdMin != null &&
+                widget.thresholdMax != null)
+            ? [
+                HorizontalLine(
+                  y: widget.thresholdMin!,
+                  color: Colors.amberAccent.withValues(alpha: 0.75),
+                  strokeWidth: 1.2,
+                  dashArray: [6, 4],
+                  label: HorizontalLineLabel(
+                    show: true,
+                    alignment: Alignment.topRight,
+                    padding: const EdgeInsets.only(right: 6, bottom: 2),
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      color: Colors.amberAccent.withValues(alpha: 0.9),
+                      fontWeight: FontWeight.bold,
+                    ),
+                    labelResolver: (_) =>
+                        'Min ${widget.thresholdMin!.toStringAsFixed(1)}',
+                  ),
+                ),
+                HorizontalLine(
+                  y: widget.thresholdMax!,
+                  color: Colors.redAccent.withValues(alpha: 0.75),
+                  strokeWidth: 1.2,
+                  dashArray: [6, 4],
+                  label: HorizontalLineLabel(
+                    show: true,
+                    alignment: Alignment.topRight,
+                    padding: const EdgeInsets.only(right: 6, bottom: 2),
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      color: Colors.redAccent.withValues(alpha: 0.9),
+                      fontWeight: FontWeight.bold,
+                    ),
+                    labelResolver: (_) =>
+                        'Max ${widget.thresholdMax!.toStringAsFixed(1)}',
+                  ),
+                ),
+              ]
+            : [],
       ),
       // Đường dóng khi người dùng chạm vào biểu đồ
       lineTouchData: LineTouchData(
@@ -463,20 +469,27 @@ class _MotionChartState extends State<MotionChart> {
           tooltipRoundedRadius: 8.0,
           getTooltipItems: (touchedSpots) {
             return touchedSpots.map((spot) {
+              final idx = spot.spotIndex;
+              final point = (idx >= 0 && idx < widget.dataPoints.length)
+                  ? widget.dataPoints[idx]
+                  : null;
+              final isMovingState = point?.isMoving ?? false;
+              final stateBadge = isMovingState ? ' • DI CHUYỂN' : ' • ĐỨNG YÊN';
+
               return LineTooltipItem(
                 '${spot.y.toStringAsFixed(2)} m/s²\n',
-                const TextStyle(
-                  color: _lineColor,
+                TextStyle(
+                  color: isMovingState ? const Color(0xFF14B8A6) : _lineColor,
                   fontSize: 12.0,
                   fontWeight: FontWeight.bold,
                 ),
                 children: [
                   TextSpan(
-                    text: '${spot.x.toStringAsFixed(1)}s',
-                    style: const TextStyle(
-                      color: Colors.white70,
+                    text: '${spot.x.toStringAsFixed(1)}s$stateBadge',
+                    style: TextStyle(
+                      color: isMovingState ? const Color(0xFF2DD4BF) : Colors.white70,
                       fontSize: 10.5,
-                      fontWeight: FontWeight.normal,
+                      fontWeight: isMovingState ? FontWeight.w600 : FontWeight.normal,
                     ),
                   ),
                 ],
@@ -632,20 +645,24 @@ class _MotionChartState extends State<MotionChart> {
         border: Border.all(color: _borderColor),
       ),
       extraLinesData: ExtraLinesData(
-        horizontalLines: [
-          HorizontalLine(
-            y: widget.thresholdMin,
-            color: Colors.amberAccent.withValues(alpha: 0.6),
-            strokeWidth: 1.0,
-            dashArray: [6, 4],
-          ),
-          HorizontalLine(
-            y: widget.thresholdMax,
-            color: Colors.redAccent.withValues(alpha: 0.6),
-            strokeWidth: 1.0,
-            dashArray: [6, 4],
-          ),
-        ],
+        horizontalLines: (widget.showThresholds &&
+                widget.thresholdMin != null &&
+                widget.thresholdMax != null)
+            ? [
+                HorizontalLine(
+                  y: widget.thresholdMin!,
+                  color: Colors.amberAccent.withValues(alpha: 0.6),
+                  strokeWidth: 1.0,
+                  dashArray: [6, 4],
+                ),
+                HorizontalLine(
+                  y: widget.thresholdMax!,
+                  color: Colors.redAccent.withValues(alpha: 0.6),
+                  strokeWidth: 1.0,
+                  dashArray: [6, 4],
+                ),
+              ]
+            : [],
       ),
       lineBarsData: [
         LineChartBarData(
