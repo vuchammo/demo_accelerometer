@@ -22,9 +22,10 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
   bool _isRuleExpanded = false;
 
-  // Config thuật toán mới (CV-based v2)
+  // Config thuật toán (v3)
   double _cvMax = 0.30;
   double _meanMin = 0.30;
+  double _peakMin = 0.20;
   double _sessionRatio = 0.50;
 
   List<RecordingSession> _cachedSessions = [];
@@ -117,6 +118,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
     final config = MotionConfig(
       cvMax: _cvMax,
       meanMin: _meanMin,
+      peakMin: _peakMin,
       sessionRatio: _sessionRatio,
     );
     _results = _computeResultsForConfig(config);
@@ -157,7 +159,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Thuật toán CV-based (v2) đánh giá phiên ghi bằng cách phân tích đường bao năng lượng trên cửa sổ trượt:',
+              'Thuật toán phát hiện di chuyển (v3) kết hợp đường bao CV và tự tương quan (autocorrelation):',
               style: TextStyle(fontSize: 13.5, height: 1.4),
             ),
             const SizedBox(height: 12.0),
@@ -174,7 +176,13 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
             ),
             const SizedBox(height: 8.0),
             _ruleBullet(
-              '3. Tỉ lệ cửa sổ di chuyển',
+              '3. Đỉnh tự tương quan (Peak AC)',
+              '> ${_peakMin.toStringAsFixed(2)} (tính chu kỳ, chống nhầm khi chạm/vuốt)',
+              Colors.purple.shade700,
+            ),
+            const SizedBox(height: 8.0),
+            _ruleBullet(
+              '4. Tỉ lệ cửa sổ di chuyển',
               '≥ ${(_sessionRatio * 100).toStringAsFixed(0)}% tổng cửa sổ',
               Colors.deepOrange.shade700,
             ),
@@ -187,7 +195,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                 border: Border.all(color: Colors.amber.shade200),
               ),
               child: Text(
-                'Cửa sổ 4.0s (50 mẫu), trượt ~0.48s (6 mẫu), đường bao mượt ~0.96s (12 mẫu). Hysteresis: 2 cửa sổ liên tiếp để vào MOVING, 3 để thoát về STILL. Tối ưu đa thiết bị.',
+                'Cửa sổ 4.0s (50 mẫu), trượt ~0.48s (6 mẫu), đường bao mượt ~0.8s (10 mẫu). Tự tương quan tách cao tần trễ 0.24-1.44s. Bộ lọc đa số trượt 10 cửa sổ gần nhất.',
                 style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
               ),
             ),
@@ -913,6 +921,134 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                     ],
                   ),
                 ),
+
+                // Đường liên kết ở giữa với chip VÀ (AND)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4.0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          height: 1.0,
+                          color: Colors.grey.shade200,
+                        ),
+                      ),
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 10.0),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E2235),
+                          borderRadius: BorderRadius.circular(6.0),
+                        ),
+                        child: const Text(
+                          'VÀ',
+                          style: TextStyle(
+                            fontSize: 10.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          height: 1.0,
+                          color: Colors.grey.shade200,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Dòng 3: Đỉnh tự tương quan (Peak AC)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12.0,
+                    vertical: 9.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFAF5FF), // Purple 50
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: const Color(0xFFE9D5FF), // Purple 200
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6.0),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF3E8FF),
+                          borderRadius: BorderRadius.circular(8.0),
+                        ),
+                        child: const Icon(
+                          Icons.timeline_rounded,
+                          size: 15.0,
+                          color: Color(0xFF7E22CE), // Purple 700
+                        ),
+                      ),
+                      const SizedBox(width: 10.0),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Đỉnh tự tương quan (Peak)',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF7E22CE),
+                              ),
+                            ),
+                            SizedBox(height: 1.0),
+                            Text(
+                              'Tính chu kỳ nhịp đi bộ / cử động',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF6B21A8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9.0,
+                          vertical: 4.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8.0),
+                          border: Border.all(color: const Color(0xFFD8B4FE)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text(
+                              'Peak ',
+                              style: TextStyle(
+                                fontSize: 11.0,
+                                color: Color(0xFF581C87),
+                              ),
+                            ),
+                            Text(
+                              '> ${_peakMin.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 13.0,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF7E22CE),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -1032,20 +1168,20 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                   ),
                   const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
-                    'Đường bao mượt',
-                    '~0.96s (12 mẫu)',
+                    'Đường bao mượt (CV)',
+                    '~0.8s (10 mẫu)',
                     Colors.purple.shade600,
                   ),
                   const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
-                    'Hysteresis vào',
-                    '2 cửa sổ liên tiếp',
-                    Colors.indigo.shade600,
+                    'Tự tương quan (hp / lag)',
+                    '10 mẫu / lag 3..18 (~0.24-1.44s)',
+                    Colors.deepPurple.shade600,
                   ),
                   const SizedBox(height: 6.0),
                   _buildConfigInfoRow(
-                    'Hysteresis ra',
-                    '3 cửa sổ liên tiếp',
+                    'Bộ lọc đa số trượt',
+                    '10 cửa sổ gần nhất (≥ 50%)',
                     Colors.indigo.shade600,
                   ),
                   const SizedBox(height: 6.0),
@@ -1125,6 +1261,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
   void _showConfigTuningSheet(EvaluationReport currentReport) {
     double tempCvMax = _cvMax;
     double tempMeanMin = _meanMin;
+    double tempPeakMin = _peakMin;
     double tempSessionRatio = _sessionRatio;
 
     showModalBottomSheet(
@@ -1136,6 +1273,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           final previewConfig = MotionConfig(
             cvMax: tempCvMax,
             meanMin: tempMeanMin,
+            peakMin: tempPeakMin,
             sessionRatio: tempSessionRatio,
           );
           final previewResults = _computeResultsForConfig(previewConfig);
@@ -1144,6 +1282,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
           final isModified =
               tempCvMax != 0.30 ||
               tempMeanMin != 0.30 ||
+              tempPeakMin != 0.20 ||
               tempSessionRatio != 0.50;
 
           return Container(
@@ -1215,6 +1354,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                             setSheetState(() {
                               tempCvMax = 0.30;
                               tempMeanMin = 0.30;
+                              tempPeakMin = 0.20;
                               tempSessionRatio = 0.50;
                             });
                           },
@@ -1424,7 +1564,65 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
 
                   const SizedBox(height: 10.0),
 
-                  // Slider 3: Session Ratio
+                  // Slider 3: Peak Min (autocorrelation)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.timeline_rounded,
+                            size: 16.0,
+                            color: Colors.purple.shade700,
+                          ),
+                          const SizedBox(width: 6.0),
+                          const Text(
+                            'Đỉnh tự tương quan (Peak)',
+                            style: TextStyle(
+                              fontSize: 13.0,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0,
+                          vertical: 2.0,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.purple.shade50,
+                          borderRadius: BorderRadius.circular(6.0),
+                          border: Border.all(color: Colors.purple.shade200),
+                        ),
+                        child: Text(
+                          '> ${tempPeakMin.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 13.0,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.purple.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: tempPeakMin,
+                    min: 0.05,
+                    max: 0.50,
+                    divisions: 18,
+                    activeColor: Colors.purple.shade700,
+                    inactiveColor: Colors.purple.shade100,
+                    onChanged: (val) {
+                      setSheetState(() {
+                        tempPeakMin = val;
+                      });
+                    },
+                  ),
+
+                  const SizedBox(height: 10.0),
+
+                  // Slider 4: Session Ratio
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -1504,6 +1702,7 @@ class _AlgorithmEvaluationScreenState extends State<AlgorithmEvaluationScreen> {
                             setState(() {
                               _cvMax = tempCvMax;
                               _meanMin = tempMeanMin;
+                              _peakMin = tempPeakMin;
                               _sessionRatio = tempSessionRatio;
                               _recomputeResults();
                             });

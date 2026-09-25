@@ -40,6 +40,9 @@ class MotionLogEntry {
   /// Hệ số biến thiên (Coefficient of Variation) = std / mean
   final double cv;
 
+  /// Đỉnh tự tương quan (độ mạnh tính chu kỳ)
+  final double peak;
+
   /// Phiếu thô của cửa sổ hiện tại (true = vote di chuyển)
   final bool vote;
 
@@ -57,6 +60,7 @@ class MotionLogEntry {
     required this.category,
     required this.mean,
     required this.cv,
+    required this.peak,
     required this.vote,
     required this.isMoving,
     required this.stateChanged,
@@ -137,9 +141,10 @@ class MotionLogEntry {
         : '${AnsiColor.cyan}STILL${AnsiColor.reset}';
     final cvStr = cv.toStringAsFixed(3);
     final meanStr = mean.toStringAsFixed(3);
+    final peakStr = peak.toStringAsFixed(3);
     final voteStr = vote ? 'Y' : 'N';
 
-    return '[$formattedTime] $categoryBadge Mag: $magStr m/s² $gaugeBar | CV=$cvStr Mean=$meanStr Vote=$voteStr | $stateStr';
+    return '[$formattedTime] $categoryBadge Mag: $magStr m/s² $gaugeBar | CV=$cvStr Mean=$meanStr Peak=$peakStr Vote=$voteStr | $stateStr';
   }
 
   /// Banner nổi bật in ra console khi có sự kiện đổi trạng thái
@@ -149,7 +154,7 @@ class MotionLogEntry {
     final stateColor = isMoving ? AnsiColor.yellow : AnsiColor.cyan;
     final reason =
         triggerReason ??
-        (isMoving ? 'Đủ cửa sổ di chuyển liên tiếp' : 'Đủ cửa sổ đứng yên liên tiếp');
+        (isMoving ? 'Đa số cửa sổ gần nhất bỏ phiếu di chuyển' : 'Đa số cửa sổ gần nhất bỏ phiếu đứng yên');
     final magStr = magnitude.toStringAsFixed(2);
 
     return '''
@@ -157,7 +162,7 @@ ${AnsiColor.bold}$stateColor╔════════════════�
 ║ ⚡ [STATE CHANGED] $fromState  ➔  $toState
 ║ ⏱ Thời gian     : $formattedTime
 ║ 🎯 Lý do         : $reason
-║ 📊 Mag kích hoạt : $magStr m/s²  |  CV: ${cv.toStringAsFixed(3)}  Mean: ${mean.toStringAsFixed(3)}
+║ 📊 Mag kích hoạt : $magStr m/s²  |  CV: ${cv.toStringAsFixed(3)}  Mean: ${mean.toStringAsFixed(3)}  Peak: ${peak.toStringAsFixed(3)}
 ╚══════════════════════════════════════════════════════════════════════════╝${AnsiColor.reset}''';
   }
 }

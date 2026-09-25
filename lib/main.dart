@@ -661,12 +661,12 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                                 fontFeatures: [FontFeature.tabularFigures()],
                               ),
                             ),
-                            if (_detector.currentHysteresisRun > 0) ...[
+                            if (_detector.lastWindow != null) ...[
                               const SizedBox(height: 2.0),
                               Text(
                                 isMoving
-                                    ? 'Đang xác nhận dừng (${_detector.currentHysteresisRun}/${_detector.config.exitCount})...'
-                                    : 'Đang xác nhận di chuyển (${_detector.currentHysteresisRun}/${_detector.config.enterCount})...',
+                                    ? 'Bộ lọc đa số: đang di chuyển'
+                                    : 'Bộ lọc đa số: đang đứng yên',
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   color: Colors.white.withValues(alpha: 0.85),
@@ -844,7 +844,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     );
   }
 
-  /// Thẻ thông số thuật toán phát hiện di chuyển CV (v2)
+  /// Thẻ thông số thuật toán phát hiện di chuyển (v3)
   Widget _buildAlgorithmMetricsCard() {
     final lastWindow = _detector.lastWindow;
     final isMoving = _detector.isMoving;
@@ -853,10 +853,12 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
     final hasWindow = lastWindow != null;
     final currentCv = lastWindow?.cv ?? 0.0;
     final currentMean = lastWindow?.mean ?? 0.0;
+    final currentPeak = lastWindow?.peak ?? 0.0;
     final currentVote = lastWindow?.vote ?? false;
 
     final isCvSatisfied = hasWindow && currentCv < config.cvMax;
     final isMeanSatisfied = hasWindow && currentMean > config.meanMin;
+    final isPeakSatisfied = hasWindow && currentPeak > config.peakMin;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20.0),
@@ -889,7 +891,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                   ),
                   const SizedBox(width: 6.0),
                   const Text(
-                    'Cửa sổ trượt CV (v2)',
+                    'Cửa sổ trượt CV + AC (v3)',
                     style: TextStyle(
                       fontSize: 14.5,
                       fontWeight: FontWeight.bold,
@@ -1079,6 +1081,84 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                   ),
                 ),
               ),
+              const SizedBox(width: 8.0),
+              // Ô 3: Đỉnh tự tương quan Peak
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10.0),
+                  decoration: BoxDecoration(
+                    color: isPeakSatisfied
+                        ? Colors.teal.shade50
+                        : const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12.0),
+                    border: Border.all(
+                      color: isPeakSatisfied
+                          ? Colors.teal.shade300
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Peak AC',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5.0,
+                              vertical: 1.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isPeakSatisfied
+                                  ? Colors.teal.shade100
+                                  : Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(4.0),
+                            ),
+                            child: Text(
+                              isPeakSatisfied ? 'Chu kỳ' : 'Không',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: isPeakSatisfied
+                                    ? Colors.teal.shade900
+                                    : Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4.0),
+                      Text(
+                        hasWindow ? currentPeak.toStringAsFixed(3) : '--',
+                        style: TextStyle(
+                          fontSize: 19.0,
+                          fontWeight: FontWeight.w800,
+                          color: isPeakSatisfied
+                              ? Colors.teal.shade900
+                              : Colors.grey.shade800,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(height: 2.0),
+                      Text(
+                        'Tiêu chuẩn: > ${config.peakMin.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10.0),
@@ -1113,7 +1193,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
                   child: Text(
                     hasWindow
                         ? (currentVote
-                            ? 'Phiếu cửa sổ hiện tại: CÓ DI CHUYỂN (Thỏa mãn CV & Mean)'
+                            ? 'Phiếu cửa sổ hiện tại: CÓ DI CHUYỂN (Thỏa mãn CV & Mean & Peak)'
                             : 'Phiếu cửa sổ hiện tại: ĐỨNG YÊN (Chưa đủ điều kiện di chuyển)')
                         : 'Đang thu thập đủ 50 mẫu cửa sổ đầu tiên...',
                     style: TextStyle(
@@ -1130,7 +1210,7 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
           ),
           const SizedBox(height: 8.0),
 
-          // Máy trạng thái Hysteresis
+          // Bộ lọc đa số trượt (Majority Filter)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
             decoration: BoxDecoration(
@@ -1141,16 +1221,16 @@ class _MotionDetectorViewState extends State<MotionDetectorView> {
             child: Row(
               children: [
                 Icon(
-                  Icons.history_toggle_off_rounded,
+                  Icons.how_to_vote_rounded,
                   size: 14.0,
                   color: Colors.grey.shade600,
                 ),
                 const SizedBox(width: 6.0),
                 Expanded(
                   child: Text(
-                    isMoving
-                        ? 'Chống nhảy trạng thái: Cần ${config.exitCount} cửa sổ đứng yên liên tiếp để dừng (${_detector.currentHysteresisRun}/${config.exitCount})'
-                        : 'Chống nhảy trạng thái: Cần ${config.enterCount} cửa sổ di chuyển liên tiếp để kích hoạt (${_detector.currentHysteresisRun}/${config.enterCount})',
+                    hasWindow
+                        ? 'Bộ lọc đa số: ${isMoving ? "ĐANG DI CHUYỂN" : "ĐANG ĐỨNG YÊN"} (Xét ${config.majorityWindow} cửa sổ gần nhất, cần ≥ ${(config.majorityFrac * 100).toStringAsFixed(0)}% phiếu di chuyển)'
+                        : 'Bộ lọc đa số: Đang thu thập dữ liệu (cần ${config.majorityWindow} cửa sổ gần nhất)',
                     style: TextStyle(
                       fontSize: 11.0,
                       color: Colors.grey.shade700,

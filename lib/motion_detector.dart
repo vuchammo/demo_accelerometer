@@ -1,34 +1,46 @@
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'chart_data_point.dart';
 import 'motion_log_models.dart';
 
 // ---------------------------------------------------------------------------
-// Thuật toán phát hiện di chuyển / đứng yên — v2 (tương thích đa thiết bị)
+// Thuật toán phát hiện di chuyển / đứng yên — v3 (tương thích đa thiết bị)
 //
 // Đầu vào: magnitude gia tốc tổng hợp, thời gian tính bằng GIÂY (double).
 // Tần số lấy mẫu của máy có thể khác nhau (đã thử 10–12.5 Hz): dữ liệu được
 // nội suy về lưới đều [MotionConfig.sampleRateHz].
 //
-// Ý tưởng: trong mỗi cửa sổ 4 s, làm mượt bằng trung bình trượt ~1 s để lấy
-// "đường bao năng lượng", rồi tính CV = std/mean của đường bao.
-//  - Di chuyển: hoạt động duy trì, ổn định  -> CV thấp.
-//  - Đứng yên : vài cụm ngắn xen quãng lặng -> CV cao.
-// CV là tỉ số nên không phụ thuộc thang biên độ; chỉ điều kiện
-// mean > meanMin (loại nhiễu nền) là phụ thuộc đơn vị.
+// Khác với v2: v2 chỉ dựa vào việc dao động có DUY TRÌ hay không (CV thấp của
+// đường bao). Khi người dùng chạm/vuốt/lướt màn hình trong lúc điện thoại vẫn
+// nằm yên, dao động do ngón tay tạo ra cũng duy trì liên tục suốt phiên, nên
+// v2 báo nhầm là MOVING.
+//
+// v3 thêm điều kiện: dao động phải CÓ TÍNH CHU KỲ (giống nhịp mang/cầm điện
+// thoại khi di chuyển) chứ không chỉ liên tục. Đo bằng đỉnh tự tương quan
+// (autocorrelation) của phần cao tần trong cửa sổ, ở độ trễ 0.24-1.44 giây
+// (nhịp đi bộ / đung đưa tay). Chạm/vuốt tạo ra các cú giật không lặp lại
+// theo nhịp nên đỉnh tự tương quan thường thấp hơn.
+//
+// Quyết định theo thời gian thực dùng bộ lọc đa số trượt trên N cửa sổ gần
+// nhất, thay vì đếm "N cửa sổ liên tiếp" như v2 — mượt hơn, ít bị kẹt trạng
+// thái khi có vài cửa sổ lẻ tẻ đổi chiều.
 // ---------------------------------------------------------------------------
 
-/// Cấu hình tham số cho thuật toán phát hiện di chuyển (v2).
+/// Cấu hình tham số cho thuật toán phát hiện di chuyển (v3).
 class MotionConfig {
   const MotionConfig({
     this.sampleRateHz = 12.5,
     this.windowSamples = 50, // 4.0 s
     this.hopSamples = 6, // ~0.48 s
-    this.envSamples = 12, // ~0.96 s, cửa sổ làm mượt đường bao
+    this.envSamples = 10, // ~0.8 s, làm mượt cho CV
+    this.hpSamples = 10, // ~0.8 s, làm mượt để tách phần cao tần (tự tương quan)
+    this.lagLo = 3, // 0.24 s
+    this.lagHi = 18, // 1.44 s
     this.cvMax = 0.30,
     this.meanMin = 0.30,
-    this.enterCount = 2,
-    this.exitCount = 3,
+    this.peakMin = 0.20, // đỉnh tự tương quan tối thiểu để coi là "có chu kỳ"
+    this.majorityWindow = 10, // số cửa sổ gần nhất xét bộ lọc đa số (~5 s)
+    this.majorityFrac = 0.5, // tỉ lệ tối thiểu phải là "di chuyển"
     this.sessionRatio = 0.5,
     this.skipSeconds = 1.5,
   });
@@ -36,20 +48,34 @@ class MotionConfig {
   /// Tần số lưới nội suy (Hz).
   final double sampleRateHz;
 
-  /// Kích thước cửa sổ / bước trượt / cửa sổ làm mượt, tính bằng số mẫu trên lưới.
+  /// Kích thước cửa sổ / bước trượt, tính bằng số mẫu trên lưới.
   final int windowSamples;
   final int hopSamples;
+
+  /// Cửa sổ làm mượt đường bao (cho CV).
   final int envSamples;
 
-  /// Cửa sổ bỏ phiếu "di chuyển" nếu cv < cvMax và mean > meanMin.
+  /// Cửa sổ trung bình trượt để tách phần cao tần (cho tự tương quan).
+  final int hpSamples;
+
+  /// Khoảng độ trễ (lag) để tìm đỉnh tự tương quan (nhịp đi bộ / đung đưa tay).
+  final int lagLo;
+  final int lagHi;
+
+  /// Cửa sổ bỏ phiếu "di chuyển" nếu cv < cvMax, mean > meanMin, và peak > peakMin.
   /// meanMin cùng đơn vị với magnitude (đang ở thang ~m/s²; nếu máy trả về đơn vị
   /// khác, ví dụ g, hãy quy đổi trước hoặc đổi meanMin).
   final double cvMax;
   final double meanMin;
 
-  /// Số cửa sổ liên tiếp để vào MOVING / thoát về STILL (hysteresis).
-  final int enterCount;
-  final int exitCount;
+  /// Đỉnh tự tương quan tối thiểu để coi là "có chu kỳ".
+  final double peakMin;
+
+  /// Số cửa sổ gần nhất xét bộ lọc đa số.
+  final int majorityWindow;
+
+  /// Tỉ lệ tối thiểu phải là "di chuyển" trong bộ lọc đa số.
+  final double majorityFrac;
 
   /// Chỉ dùng cho [MotionDetector.classifySession].
   final double sessionRatio;
@@ -57,7 +83,6 @@ class MotionConfig {
 
   double get windowSeconds => windowSamples / sampleRateHz;
   double get hopSeconds => hopSamples / sampleRateHz;
-  double get envSeconds => envSamples / sampleRateHz;
 }
 
 /// Kết quả của một cửa sổ trượt.
@@ -66,6 +91,7 @@ class MotionWindow {
     required this.endTime,
     required this.mean,
     required this.cv,
+    required this.peak,
     required this.vote,
     required this.isMoving,
   });
@@ -77,16 +103,20 @@ class MotionWindow {
   final double mean;
   final double cv;
 
-  /// Phiếu thô của riêng cửa sổ này (chưa qua hysteresis).
+  /// Đỉnh tự tương quan (độ mạnh tính chu kỳ) trong khoảng [lagLo, lagHi).
+  final double peak;
+
+  /// Phiếu thô của riêng cửa sổ này (chưa qua bộ lọc đa số).
   final bool vote;
 
-  /// Trạng thái sau hysteresis: true = MOVING.
+  /// Trạng thái sau bộ lọc đa số trượt: true = MOVING.
   final bool isMoving;
 
   @override
   String toString() =>
       'MotionWindow(t=${endTime.toStringAsFixed(2)}, mean=${mean.toStringAsFixed(2)}, '
-      'cv=${cv.toStringAsFixed(2)}, vote=$vote, isMoving=$isMoving)';
+      'cv=${cv.toStringAsFixed(2)}, peak=${peak.toStringAsFixed(2)}, '
+      'vote=$vote, isMoving=$isMoving)';
 }
 
 /// Kết quả phân loại toàn bộ phiên ghi.
@@ -111,7 +141,8 @@ class SessionResult {
 }
 
 // ---------------------------------------------------------------------------
-// Engine nội bộ: xử lý nội suy, cửa sổ trượt, đường bao năng lượng, CV, hysteresis.
+// Engine nội bộ: xử lý nội suy, cửa sổ trượt, đường bao năng lượng, CV,
+// tự tương quan (autocorrelation), bộ lọc đa số trượt.
 // ---------------------------------------------------------------------------
 class _CvEngine {
   _CvEngine({required this.config});
@@ -124,14 +155,13 @@ class _CvEngine {
   double _tp = 0; // mẫu thô trước đó
   double _mp = 0;
   int _dropped = 0; // số điểm lưới đã trượt khỏi đầu buffer
+
+  /// Buffer tròn các phiếu gần nhất, dùng cho bộ lọc đa số.
+  final List<int> _votes = <int>[];
   bool _moving = false;
-  int _run = 0;
 
-  /// Trạng thái hiện tại (sau hysteresis).
+  /// Trạng thái hiện tại (sau bộ lọc đa số).
   bool get isMoving => _moving;
-
-  /// Số cửa sổ liên tiếp tích lũy trong máy trạng thái hysteresis hiện tại.
-  int get run => _run;
 
   void reset() {
     _buf.clear();
@@ -140,8 +170,8 @@ class _CvEngine {
     _tp = 0;
     _mp = 0;
     _dropped = 0;
+    _votes.clear();
     _moving = false;
-    _run = 0;
   }
 
   /// Đưa một mẫu thô vào. Trả về các cửa sổ mới hoàn thành (thường 0 hoặc 1;
@@ -174,54 +204,91 @@ class _CvEngine {
     return out;
   }
 
+  /// Trung bình trượt kiểu "same" (numpy convolve mode='same'): cùng độ dài
+  /// với đầu vào, tâm hoá quanh mỗi mẫu. K có thể chẵn hoặc lẻ.
+  static List<double> _movingAverageSame(List<double> w, int k) {
+    final n = w.length;
+    final start = (k - 1) ~/ 2;
+    final out = List<double>.filled(n, 0.0);
+    for (var i = 0; i < n; i++) {
+      final fi = i + start; // chỉ số tương ứng trong convolution 'full'
+      final lo = math.max(0, fi - k + 1);
+      final hi = math.min(fi, n - 1);
+      var total = 0.0;
+      for (var m = lo; m <= hi; m++) {
+        total += w[m];
+      }
+      out[i] = total / k;
+    }
+    return out;
+  }
+
   void _drain(List<MotionWindow> out) {
     final n = config.windowSamples;
-    final k = config.envSamples;
-    final ne = n - k + 1; // số điểm đường bao (kiểu "valid")
     while (_buf.length >= n) {
-      // Đường bao: trung bình trượt k mẫu bên trong cửa sổ.
+      final w = _buf.sublist(0, n);
+
+      // --- CV của đường bao (làm mượt envSamples) ---
+      final envK = config.envSamples;
+      final ne = n - envK + 1;
       final env = List<double>.filled(ne, 0.0);
       for (var j = 0; j < ne; j++) {
         var a = 0.0;
-        for (var i = 0; i < k; i++) {
-          a += _buf[j + i];
+        for (var i = 0; i < envK; i++) {
+          a += w[j + i];
         }
-        env[j] = a / k;
+        env[j] = a / envK;
       }
-      var sum = 0.0;
+      var esum = 0.0;
       for (final e in env) {
-        sum += e;
+        esum += e;
       }
-      final mean = sum / ne;
-      var sq = 0.0;
+      final mean = esum / ne;
+      var esq = 0.0;
       for (final e in env) {
         final d = e - mean;
-        sq += d * d;
+        esq += d * d;
       }
-      final std = sqrt(sq / ne); // độ lệch chuẩn tổng thể (ddof = 0)
-      final cv = std / (mean + 1e-9);
-      final vote = cv < config.cvMax && mean > config.meanMin;
+      final cv = math.sqrt(esq / ne) / (mean + 1e-9);
 
-      // Máy trạng thái có trễ.
-      if (!_moving) {
-        _run = vote ? _run + 1 : 0;
-        if (_run >= config.enterCount) {
-          _moving = true;
-          _run = 0;
-        }
-      } else {
-        _run = !vote ? _run + 1 : 0;
-        if (_run >= config.exitCount) {
-          _moving = false;
-          _run = 0;
-        }
+      // --- Phần cao tần (trừ trung bình trượt "same") cho tự tương quan ---
+      final sm = _movingAverageSame(w, config.hpSamples);
+      final hp = List<double>.filled(n, 0.0);
+      for (var i = 0; i < n; i++) {
+        hp[i] = w[i] - sm[i];
       }
+      var denom = 0.0;
+      for (final v in hp) {
+        denom += v * v;
+      }
+      denom += 1e-9;
+      var peak = 0.0;
+      final lagHi = math.min(config.lagHi, n);
+      for (var lag = config.lagLo; lag < lagHi; lag++) {
+        var s = 0.0;
+        for (var i = 0; i < n - lag; i++) {
+          s += hp[i] * hp[i + lag];
+        }
+        final val = s / denom;
+        if (val > peak) peak = val;
+      }
+
+      final vote = cv < config.cvMax && mean > config.meanMin && peak > config.peakMin;
+
+      // --- Bộ lọc đa số trượt ---
+      _votes.add(vote ? 1 : 0);
+      if (_votes.length > config.majorityWindow) {
+        _votes.removeAt(0);
+      }
+      final voteSum = _votes.fold<int>(0, (a, b) => a + b);
+      _moving = (voteSum / _votes.length) >= config.majorityFrac;
 
       final endTime = _t0! + (_dropped + n - 1) / config.sampleRateHz;
       out.add(MotionWindow(
         endTime: endTime,
         mean: mean,
         cv: cv,
+        peak: peak,
         vote: vote,
         isMoving: _moving,
       ));
@@ -278,9 +345,6 @@ class MotionDetector {
   MotionWindow? _lastWindow;
   MotionWindow? get lastWindow => _lastWindow;
 
-  /// Số cửa sổ liên tiếp tích lũy trong hysteresis hiện tại
-  int get currentHysteresisRun => _engine.run;
-
   // --- Real-time Recording Prediction Stats ---
   int _recordingTotalWindows = 0;
   int _recordingMovingVotes = 0;
@@ -320,7 +384,7 @@ class MotionDetector {
 
   /// Đưa một mẫu cảm biến vào. Trả về true nếu trạng thái MOVING/STILL thay đổi.
   bool addSample(double x, double y, double z, DateTime time) {
-    final magnitude = sqrt(x * x + y * y + z * z);
+    final magnitude = math.sqrt(x * x + y * y + z * z);
 
     _recentMagnitudes.insert(0, magnitude);
     if (_recentMagnitudes.length > 10) {
@@ -364,6 +428,7 @@ class MotionDetector {
     // Kiểm tra thay đổi trạng thái
     double lastMean = _lastWindow?.mean ?? 0;
     double lastCv = _lastWindow?.cv ?? 0;
+    double lastPeak = _lastWindow?.peak ?? 0;
     bool lastVote = _lastWindow?.vote ?? false;
 
     if (windows.isNotEmpty) {
@@ -371,6 +436,7 @@ class MotionDetector {
       _lastWindow = latestWindow;
       lastMean = latestWindow.mean;
       lastCv = latestWindow.cv;
+      lastPeak = latestWindow.peak;
       lastVote = latestWindow.vote;
 
       if (isDetectionEnabled) {
@@ -379,8 +445,8 @@ class MotionDetector {
           _isMoving = newMoving;
           stateChanged = true;
           triggerReason = newMoving
-              ? 'CV=${lastCv.toStringAsFixed(3)} < ${config.cvMax}, Mean=${lastMean.toStringAsFixed(3)} > ${config.meanMin} (${config.enterCount} cửa sổ liên tiếp)'
-              : 'Không thỏa mãn điều kiện di chuyển (${config.exitCount} cửa sổ liên tiếp)';
+              ? 'CV=${lastCv.toStringAsFixed(3)} < ${config.cvMax}, Mean=${lastMean.toStringAsFixed(3)} > ${config.meanMin}, Peak=${lastPeak.toStringAsFixed(3)} > ${config.peakMin} (bộ lọc đa số)'
+              : 'Không thỏa mãn điều kiện di chuyển (bộ lọc đa số)';
         }
       }
 
@@ -450,6 +516,7 @@ class MotionDetector {
       category: category,
       mean: lastMean,
       cv: lastCv,
+      peak: lastPeak,
       vote: lastVote,
       isMoving: _isMoving,
       stateChanged: stateChanged,
@@ -506,7 +573,7 @@ class MotionDetector {
     if (w == null) return '';
     final timeStr = entry.formattedTime;
     final stateStr = entry.isMoving ? 'MOVING' : 'STILL';
-    return '[$timeStr] [SUMMARY] Mean: ${w.mean.toStringAsFixed(3)} | CV: ${w.cv.toStringAsFixed(3)} | Vote: ${w.vote} | State: $stateStr';
+    return '[$timeStr] [SUMMARY] Mean: ${w.mean.toStringAsFixed(3)} | CV: ${w.cv.toStringAsFixed(3)} | Peak: ${w.peak.toStringAsFixed(3)} | Vote: ${w.vote} | State: $stateStr';
   }
 
   /// Bắt đầu ghi lịch sử

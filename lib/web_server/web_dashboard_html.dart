@@ -297,6 +297,97 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
       color: #fff;
     }
 
+    .ai-badge-label {
+      font-size: 0.65rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .ai-badge-label.moving {
+      background: rgba(0, 230, 118, 0.15);
+      border: 1px solid rgba(0, 230, 118, 0.4);
+      color: #00E676;
+    }
+    .ai-badge-label.still {
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #94A3B8;
+    }
+    .ai-label-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 0.74rem;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s;
+    }
+    .ai-label-pill.moving {
+      background: rgba(0, 230, 118, 0.14);
+      border: 1px solid rgba(0, 230, 118, 0.45);
+      color: #00E676;
+    }
+    .ai-label-pill.moving:hover {
+      background: rgba(0, 230, 118, 0.24);
+      border-color: #00E676;
+    }
+    .ai-label-pill.still {
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      color: #CBD5E1;
+    }
+    .ai-label-pill.still:hover {
+      background: rgba(148, 163, 184, 0.22);
+      border-color: #CBD5E1;
+    }
+    .btn-export-all {
+      width: 100%;
+      margin-top: 10px;
+      justify-content: center;
+      font-size: 0.78rem;
+      padding: 7px 12px;
+      background: rgba(0, 229, 255, 0.08);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      color: var(--cyan);
+    }
+    .btn-export-all:hover {
+      background: rgba(0, 229, 255, 0.18);
+      border-color: var(--cyan);
+      color: #fff;
+    }
+    .toast-msg {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #171D2D;
+      border: 1px solid var(--cyan);
+      color: #F1F5F9;
+      padding: 10px 18px;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      font-size: 0.85rem;
+      font-weight: 500;
+      z-index: 9999;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.25s ease;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toast-msg.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
     .session-list {
       flex: 1;
       overflow-y: auto;
@@ -666,6 +757,10 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
           <input type="text" id="searchInput" placeholder="Tìm theo tag, ngày..." oninput="filterSessions()">
         </div>
         <div class="tag-filter-bar" id="tagFilterBar"></div>
+        <button class="btn btn-secondary btn-export-all" id="btnExportAll" onclick="exportAllSessionsCSV()" title="Gộp tất cả phiên thành 1 file CSV chuẩn AI với đầy đủ cột session_id, relative_time, magnitude, label, tag">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+          Xuất toàn bộ Dataset AI (.csv)
+        </button>
       </div>
 
       <div class="session-list" id="sessionList">
@@ -698,13 +793,13 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
             <p id="sessionSubtitle">Bắt đầu: ...</p>
           </div>
           <div class="session-actions">
-            <button class="btn btn-secondary" onclick="exportJSON()">
+            <button class="btn btn-secondary" onclick="exportJSON()" title="Xuất file JSON nguyên bản">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
               Xuất JSON
             </button>
-            <button class="btn btn-secondary" onclick="exportCSV()">
+            <button class="btn btn-primary" onclick="exportCSV()" title="Xuất CSV chuẩn AI Training (relative_time, magnitude, label, tag)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-              Xuất CSV
+              Xuất CSV (AI Training)
             </button>
           </div>
         </div>
@@ -775,6 +870,107 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
     let currentSession = null;
     let currentDataPoints = [];
     let mainChartInstance = null;
+    let manualSessionLabels = {};
+
+    function removeDiacritics(str) {
+      if (!str) return '';
+      return str.normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D')
+        .toLowerCase()
+        .trim();
+    }
+
+    const STILL_KEYWORDS = [
+      'khong di chuyen',
+      'dung yen',
+      'de ban',
+      'dat ban',
+      'de tren ban',
+      'dat tren ban',
+      'tinh',
+      'ngoi yen',
+      'ngoi',
+      'still',
+      'stop',
+      'rest',
+      'bat dong',
+      'khong chuyen dong',
+      'dung',
+      'nam yen'
+    ];
+
+    const MOVING_KEYWORDS = [
+      'cam tren tay',
+      'cam tay',
+      'di cham',
+      'di bo',
+      'walk',
+      'chay',
+      'run',
+      'jogging',
+      'di chuyen',
+      'moving',
+      'motion',
+      'bo tui',
+      'tui quan',
+      'xe may',
+      'oto',
+      'xe',
+      'bike',
+      'car',
+      'di lai',
+      'buoc chan',
+      'hoat dong'
+    ];
+
+    function determineSessionLabel(session) {
+      if (!session) return 0;
+      if (manualSessionLabels[session.id] !== undefined) {
+        return manualSessionLabels[session.id];
+      }
+      const tag = (session.label || '').trim();
+      if (tag) {
+        const norm = removeDiacritics(tag);
+        for (const kw of STILL_KEYWORDS) {
+          if (norm.includes(kw)) return 0;
+        }
+        for (const kw of MOVING_KEYWORDS) {
+          if (norm.includes(kw)) return 1;
+        }
+      }
+      const pct = Number(session.motion_percentage || 0);
+      return pct >= 50.0 ? 1 : 0;
+    }
+
+    function slugifyTag(tag) {
+      if (!tag) return '';
+      return removeDiacritics(tag)
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    function toggleCurrentSessionLabel() {
+      if (!currentSession) return;
+      const cur = determineSessionLabel(currentSession);
+      const next = cur === 1 ? 0 : 1;
+      manualSessionLabels[currentSession.id] = next;
+      renderSessionDetails();
+      renderSessionList(getFilteredSessions());
+      showToast(`Đã đổi nhãn AI phiên #${currentSession.id}: [${next}] ${next === 1 ? 'Di chuyển' : 'Đứng yên'}`);
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toastMsg');
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(window._toastTimeout);
+      window._toastTimeout = setTimeout(() => {
+        el.classList.remove('show');
+      }, 3500);
+    }
 
     // Chart options state
     let showDots = true;
@@ -1037,6 +1233,10 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
         const dateStr = `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
         const hasTag = s.label && s.label.trim();
         const tagBadge = hasTag ? `<span class="badge-tag">#${s.label.trim()}</span>` : '';
+        const aiLabel = determineSessionLabel(s);
+        const aiBadge = aiLabel === 1
+          ? '<span class="ai-badge-label moving" title="Nhãn AI Ground Truth: 1 (Di chuyển)">[1] Di chuyển</span>'
+          : '<span class="ai-badge-label still" title="Nhãn AI Ground Truth: 0 (Đứng yên)">[0] Đứng yên</span>';
 
         return `
           <div class="session-card ${isActive ? 'active' : ''}" onclick="selectSession(${s.id})">
@@ -1050,15 +1250,16 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
             <div class="card-metrics">
               <span class="metric-badge cyan">⏱️ ${timeStr}</span>
               <span class="metric-badge green">⚡ ${Number(s.avg_magnitude).toFixed(2)} m/s²</span>
+              ${aiBadge}
             </div>
           </div>
         `;
       }).join('');
     }
 
-    function filterSessions() {
-      const q = document.getElementById('searchInput').value.toLowerCase().trim();
-      const filtered = allSessions.filter(s => {
+    function getFilteredSessions() {
+      const q = document.getElementById('searchInput') ? document.getElementById('searchInput').value.toLowerCase().trim() : '';
+      return allSessions.filter(s => {
         // Tag chip match
         if (selectedTag) {
           const sLabel = (s.label || '').trim().toLowerCase();
@@ -1075,7 +1276,10 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
         }
         return true;
       });
-      renderSessionList(filtered);
+    }
+
+    function filterSessions() {
+      renderSessionList(getFilteredSessions());
     }
 
     async function editSessionTag() {
@@ -1144,6 +1348,7 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
 
       const tagContainer = document.getElementById('sessionTagBadgeContainer');
       if (tagContainer) {
+        const curLabel = determineSessionLabel(currentSession);
         tagContainer.innerHTML = `
           <div class="detail-tag-wrapper">
             ${hasTag ? `<span class="badge-tag" style="font-size:0.75rem; padding:3px 9px;">#${currentSession.label.trim()}</span>` : '<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">Chưa có tag</span>'}
@@ -1151,6 +1356,9 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
               ${hasTag ? 'Đổi tag' : 'Thêm tag'}
             </button>
+            <div class="ai-label-pill ${curLabel === 1 ? 'moving' : 'still'}" onclick="toggleCurrentSessionLabel()" title="Bấm để chuyển đổi nhãn AI Ground Truth (1: Di chuyển, 0: Đứng yên)">
+              <span style="font-weight:700">Nhãn AI:</span> [${curLabel}] ${curLabel === 1 ? 'Di chuyển (Moving)' : 'Đứng yên (Still)'} ⇄
+            </div>
           </div>
         `;
       }
@@ -1426,13 +1634,77 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
     }
 
     function exportCSV() {
-      if (!currentDataPoints.length) return;
-      let csv = 'relative_time,magnitude,is_moving,category\n';
-      for (const p of currentDataPoints) {
-        csv += `${p.relative_time},${p.magnitude},${p.is_moving ? 1 : 0},${p.category}\n`;
+      if (!currentSession || !currentDataPoints.length) {
+        showToast('Không có dữ liệu để xuất CSV');
+        return;
       }
-      const blob = new Blob([csv], { type: 'text/csv' });
-      downloadBlob(blob, `session_${currentSession.id}_points.csv`);
+      const label = determineSessionLabel(currentSession);
+      const tag = slugifyTag(currentSession.label) || 'none';
+
+      let csv = 'relative_time,magnitude,label,tag\n';
+      const t0 = currentDataPoints[0].relative_time || 0;
+      for (const p of currentDataPoints) {
+        const relTime = Math.max(0, (p.relative_time - t0)).toFixed(3);
+        const mag = Number(p.magnitude).toFixed(3);
+        csv += `${relTime},${mag},${label},${tag}\n`;
+      }
+
+      const labelPrefix = label === 1 ? 'label1_moving' : 'label0_still';
+      const tagPart = tag !== 'none' ? `_${tag}` : '';
+      const filename = `${labelPrefix}_session_${String(currentSession.id).padStart(2, '0')}${tagPart}.csv`;
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      downloadBlob(blob, filename);
+      showToast(`Đã xuất file AI: ${filename}`);
+    }
+
+    async function exportAllSessionsCSV() {
+      const sessions = getFilteredSessions();
+      if (!sessions || sessions.length === 0) {
+        alert('Không có phiên ghi nào phù hợp để xuất.');
+        return;
+      }
+
+      showToast(`Đang gộp dữ liệu ${sessions.length} phiên cho AI...`);
+
+      let csv = 'session_id,relative_time,magnitude,label,tag\n';
+
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        let points = [];
+        if (currentSession && currentSession.id === s.id && currentDataPoints.length) {
+          points = currentDataPoints;
+        } else if (s.id === 999 && currentDataPoints.length) {
+          points = currentDataPoints;
+        } else {
+          try {
+            const res = await fetch(`/api/sessions/${s.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              points = data.dataPoints || [];
+            }
+          } catch (e) {
+            console.warn('Lỗi tải dữ liệu phiên:', s.id, e);
+          }
+        }
+
+        if (points.length) {
+          const label = determineSessionLabel(s);
+          const tag = slugifyTag(s.label) || 'none';
+          const t0 = points[0].relative_time || 0;
+          for (const p of points) {
+            const relTime = Math.max(0, (p.relative_time - t0)).toFixed(3);
+            const mag = Number(p.magnitude).toFixed(3);
+            csv += `${s.id},${relTime},${mag},${label},${tag}\n`;
+          }
+        }
+      }
+
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const filename = `motion_dataset_all_${sessions.length}_sessions_${dateStr}.csv`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      downloadBlob(blob, filename);
+      showToast(`Đã xuất toàn bộ dataset: ${filename}`);
     }
 
     function downloadBlob(blob, filename) {
@@ -1446,6 +1718,7 @@ const String webDashboardHtml = r'''<!DOCTYPE html>
       URL.revokeObjectURL(url);
     }
   </script>
+  <div id="toastMsg" class="toast-msg"></div>
 </body>
 </html>
 ''';
